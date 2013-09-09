@@ -311,7 +311,7 @@ def get_speedup2(toy, popt_gold, p0=None, error_val=0.4):
     speedup = _time_vs_error(error_val, *popt_gold) / _time_vs_error(error_val, *popt_toy)
     return speedup
 
-def tfit(toy, p0=None):
+def plot_and_fit(toy, p0=None):
     ax = pp.gca()
     popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
     xs = np.linspace(1, toy.errors[-1, 0])
