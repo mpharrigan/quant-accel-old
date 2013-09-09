@@ -13,6 +13,19 @@ import sqlite3 as sql
 from msmaccelerator.core import markovstatemodel
 from scipy import optimize
 import pickle
+import re
+
+ERROR_CUTOFF = 2.0
+
+def _error_func_model(err, a, tau):
+    # TODO: rename _time_vs_error
+    return -tau * 1.e5 * np.log(err / a)
+
+def _error_vs_time(time, a, tau):
+    return a * np.exp(-time / (tau * 1.e2))
+
+def _time_vs_error(err, a, tau):
+    return -tau * 1.e2 * np.log(err / a)
 
 class ToySim(object):
     def __init__(self, directory, distance_cutoff=0.25, n_medoid_iters=1, n_timescales=1):
@@ -22,26 +35,26 @@ class ToySim(object):
         self.n_timescales = n_timescales
 
 
-    def do_clustering(self):
-        trajs = get_data.get_shimtraj_from_trajlist(self.traj_list)
+    def do_clustering(self, traj_list):
+        trajs = get_data.get_shimtraj_from_trajlist(traj_list)
         metric = classic.Euclidean2d()
 
         clustering.logger.setLevel('WARNING')
         hkm = clustering.HybridKMedoids(metric, trajs, k=None, distance_cutoff=self.distance_cutoff, local_num_iters=self.n_medoid_iters)
-        self.clusterer = hkm
         self.n_clusters = hkm.get_generators_as_traj()['XYZList'].shape[0]
 
         print "Clustered data into {:,} clusters".format(self.n_clusters)
+        return hkm
 
-    def build_msm(self, lag_time):
+    def build_msm(self, clusterer, lag_time):
         """Build an MSM from the loaded trajectories."""
-        counts = msml.get_count_matrix_from_assignments(self.clusterer.get_assignments(), self.n_clusters, lag_time)
+        counts = msml.get_count_matrix_from_assignments(clusterer.get_assignments(), self.n_clusters, lag_time)
         rev_counts, t_matrix, populations, mapping = msml.build_msm(counts)
         return t_matrix
 
-    def get_implied_timescales(self, lag_time, n_timescales):
+    def get_implied_timescales(self, clusterer, lag_time, n_timescales):
         """Get implied timescales at a particular lag time."""
-        t_matrix = self.build_msm(lag_time)
+        t_matrix = self.build_msm(clusterer, lag_time)
         implied_timescales = analysis.get_implied_timescales(t_matrix, n_timescales, lag_time * self.load_stride)
         print "Calculated implied timescale at lag time {}".format(lag_time)
         return implied_timescales
@@ -52,9 +65,9 @@ class ToySim(object):
         errors = np.zeros((len(percents), 2))
         for i in xrange(len(percents)):
             percent = percents[i]
-            self.load_trajs(load_stride=load_stride, load_up_to_this_percent=percent)
-            self.do_clustering()
-            its = self.get_implied_timescales(lag_time=self.good_lag_time, n_timescales=self.n_timescales)
+            traj_list = self.load_trajs(load_stride=load_stride, load_up_to_this_percent=percent)
+            clusterer = self.do_clustering(traj_list)
+            its = self.get_implied_timescales(clusterer, lag_time=self.good_lag_time, n_timescales=self.n_timescales)
 
             # Calculate error
             evec = np.log(its) - np.log(self.gold_its)
@@ -65,10 +78,34 @@ class ToySim(object):
 
         self.errors = errors
 
+    def get_implied_timescales_vs_lt(self, clusterer, range_tuple, n_timescales=4):
+        """Get implied timescales vs lag time."""
+        lt_range = range(*range_tuple)
+        implied_timescales = np.zeros((len(lt_range), n_timescales))
+
+        for i in xrange(len(lt_range)):
+            implied_timescales[i] = self.get_implied_timescales(clusterer, lag_time=lt_range[i], n_timescales=n_timescales)
+            print "Calculated implied timescale at lag time {}".format(lt_range[i])
+
+        self.implied_timescales = implied_timescales
+        self.lt_range = lt_range
+
+
+    def plot_implied_timescales_vs_lt(self):
+        for i in xrange(self.implied_timescales.shape[1]):
+            pp.scatter(self.lt_range, self.implied_timescales[:, i])
+        pp.yscale('log')
+
+    def plot_errors(self):
+        pp.plot(self.errors[:, 0], self.errors[:, 1], 'bo')
+        pp.xlabel('Walltime')
+        pp.ylabel('Error')
+
+
     def __getstate__(self):
         state = dict(self.__dict__)
         try:
-            del state['clusterer'], state['traj_list']
+            del state['gold_walltime']
         except KeyError:
             pass
         return state
@@ -91,50 +128,27 @@ class Gold(ToySim):
             traj_len = traj_list[0].shape[0]
             print "{} trajs x {:,} length = {:,} frames".format(n_trajs, traj_len, n_trajs * traj_len)
 
-        self.traj_list = traj_list
+
         self.wall_steps = load_end
+        return traj_list
 
-
-    def get_implied_timescales_vs_lt(self, range_tuple, n_timescales=4):
-        """Get implied timescales vs lag time."""
-        lt_range = range(*range_tuple)
-        implied_timescales = np.zeros((len(lt_range), n_timescales))
-
-        for i in xrange(len(lt_range)):
-            t_matrix = self.build_msm(lt_range[i])
-            implied_timescales[i] = analysis.get_implied_timescales(t_matrix, n_timescales, lt_range[i] * self.load_stride)
-            print "Calculated implied timescale at lag time {}".format(lt_range[i])
-
-        self.implied_timescales = implied_timescales
-        self.lt_range = lt_range
-
-
-    def plot_implied_timescales(self):
-        for i in xrange(self.implied_timescales.shape[1]):
-            pp.scatter(self.lt_range, self.implied_timescales[:, i])
-        pp.yscale('log')
 
     def fit_error(self):
         assert self.errors is not None, 'Calculate errors before fitting.'
 
-        # Our functional form
-        def error_func_model(x, a, b):
-            return 1.e5 * a * np.exp(-b * x)
-
         # Optimize
-        popt, _ = optimize.curve_fit(error_func_model, self.errors[:, 1], self.errors[:, 0])
+        popt, _ = optimize.curve_fit(_error_func_model, self.errors[:, 1], self.errors[:, 0])
         print "Optimized parameters", popt
 
-        # Save the function
-        def gold_walltime(error):
-            return error_func_model(error, *popt)
-        self.gold_walltime = gold_walltime
+        self.popt = popt
+
+
 
     def plot_fit(self):
         pp.plot(self.errors[:, 1], self.errors[:, 0], 'bo')
         xmin, xmax = pp.xlim()
-        xs = np.linspace(xmin, xmax)
-        pp.plot(xs, self.gold_walltime(xs), 'r')
+        xs = np.linspace(1.e-4, xmax)
+        pp.plot(xs, _error_func_model(xs, *self.popt), 'r')
         pp.xlim(xmin, xmax)
         pp.xlabel('Error')
         pp.ylabel('Walltime')
@@ -170,6 +184,10 @@ class LPT(ToySim):
 
         self.models = models
 
+    def cleanup(self):
+        for model in self.models:
+            model.close()
+
 
     def load_trajs(self, load_stride, load_up_to_this_percent=1.0, verbose=True):
         self.load_stride = load_stride
@@ -185,13 +203,14 @@ class LPT(ToySim):
 
 
         # Stats
-        traj_len = traj_list[0].shape[0]
+        self.traj_len = traj_list[0].shape[0]
+        self.n_trajs = len(traj_list)
         if verbose:
-            n_trajs = len(traj_list)
-            print "{} trajs x {:,} length = {:,} frames".format(n_trajs, traj_len, n_trajs * traj_len)
+            print "{} trajs x {:,} length = {:,} frames".format(self.n_trajs, self.traj_len, self.n_trajs * self.traj_len)
 
-        self.traj_list = traj_list
-        self.wall_steps = traj_len * (model_i + 1)
+
+        self.wall_steps = self.traj_len * (model_i + 1)
+        return traj_list
 
     # Don't pickle unneccesary things
     def __getstate__(self):
@@ -205,18 +224,18 @@ class LPT(ToySim):
 
 class Compare(object):
 
-    def __init__(self, good_lag_time):
-        self.good_lag_time = good_lag_time
+    def __init__(self):
+        self.good_lag_time = 60
 
     def calculate_gold(self):
         gold = Gold('quant/gold-run/gold/')
-        gold.good_lag_time = self.good_lag_time
-        gold.load_trajs(load_stride=100, load_up_to_this_percent=1.0)
-        gold.do_clustering()
-        gold_it = gold.get_implied_timescales(lag_time=gold.good_lag_time, n_timescales=1)[0]
-        gold.gold_its = [gold_it]
+        load_stride = 10
+        gold.good_lag_time = self.good_lag_time // load_stride
+        traj_list = gold.load_trajs(load_stride=load_stride, load_up_to_this_percent=1.0)
+        clusterer = gold.do_clustering(traj_list)
+        gold.gold_its = gold.get_implied_timescales(clusterer, lag_time=gold.good_lag_time, n_timescales=1)
 
-        gold.get_error_vs_time(load_stride=1000, n_points=5, start_percent=10)
+        gold.get_error_vs_time(load_stride=load_stride, n_points=25, start_percent=5)
         gold.fit_error()
 
         self.gold = gold
@@ -232,27 +251,143 @@ class Compare(object):
                     ]
         lpt_list = list()
         for i in xrange(len(lpt_dirs)):
-            lpt = LPT(os.path.join('quant/lpt-run/', lpt_dirs[i]))
-            lpt.good_lag_time = self.good_lag_time
-            lpt.gold_its = self.gold.gold_its
-            lpt.get_models()
-            lpt.get_error_vs_time(start_percent=0.0, n_points=5, load_stride=1)
-            lpt_list.append(lpt)
+            try:
+                lpt = LPT(os.path.join('quant/lpt-run/', lpt_dirs[i]))
+                lpt.good_lag_time = self.good_lag_time
+                lpt.gold_its = self.gold.gold_its
+                lpt.get_models()
+                lpt.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
+                lpt.cleanup()
+                lpt_list.append(lpt)
+            except:
+                pass
 
         self.lpt_list = lpt_list
 
+    def calculate_ll(self):
+        ll_dirs = os.listdir('quant/parallelism-run')
+        ll_dirs = [ll  for ll in ll_dirs if ll.startswith('ll-')]
+        def sort_by_end(s):
+            return int(s[s.rfind('-') + 1:])
+        ll_dirs = sorted(ll_dirs, key=sort_by_end)
+
+        ll_list = list()
+        for i in xrange(len(ll_dirs)):
+            try:
+                ll = LPT(os.path.join('quant/parallelism-run/', ll_dirs[i]))
+                ll.good_lag_time = self.good_lag_time
+                ll.gold_its = self.gold.gold_its
+                ll.get_models()
+                ll.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
+                ll.cleanup()
+                ll_list.append(ll)
+            except:
+                pass
+
+        self.ll_list = ll_list
+
+    def calculate_repeat(self):
+        stat_dirs = os.listdir('quant/stat-run')
+        stat_dirs = [ss for ss in stat_dirs if ss.startswith('stat-')]
+
+        stat_list = list()
+        for i in xrange(len(stat_dirs)):
+            try:
+                ss = LPT(os.path.join('quant/stat-run', stat_dirs[i]))
+                ss.good_lag_time = self.good_lag_time
+                ss.gold_its = self.gold.gold_its
+                ss.get_models()
+                ss.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
+                ss.cleanup()
+                stat_list.append(ss)
+            except:
+                print "+++ Errored +++"
+                pass
+        self.stat_list = stat_list
+
+
+
+
+def lpt_dir_to_x(fn):
+    fn = fn[fn.rfind('/') + 1:]
+    reres = re.search('(?<=-)[0-9]+(?=-)', fn)
+    x = int(reres.group(0))
+    return np.log(x)
+
+def ll_dir_to_x(fn):
+    fn = fn[fn.rfind('/') + 1:]
+    reres = re.search('(?<=-)[0-9]+', fn)
+    x = int(reres.group(0))
+    return np.log(x)
+
+def get_speedup1(toy, popt):
+    er = toy.errors[-1, 1]
+    speedup = _error_func_model(er, *popt) / toy.wall_steps
+    return speedup
+
+def get_speedup2(toy, popt_gold, p0=None, error_val=0.4):
+    # Optimize
+    popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
+    speedup = _time_vs_error(error_val, *popt_gold) / _time_vs_error(error_val, *popt_toy)
+    return speedup
+
+def tfit(toy, p0=None):
+    popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
+    xs = np.linspace(1, toy.errors[-1, 0])
+    ys = _error_vs_time(xs, *popt_toy)
+    pp.plot(toy.errors[:, 0], toy.errors[:, 1], 'o')
+    pp.plot(xs, ys)
+    print popt_toy
+    return popt_toy
+
+def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.4, p0=None, error_val=0.4):
+    speedups = list()
+    xvals = list()
+    xlabels = list()
+    colors = list()
+    for toy in toys:
+
+        # speedups.append(get_speedup1(toy,popt))
+        speedups.append(get_speedup2(toy, popt_gold, p0, error_val))
+
+        if directory_to_x_func is not None:
+            xvals.append(directory_to_x_func(toy.directory))
+            xlabels.append(toy.directory)
+
+    if directory_to_x_func is None:
+        xvals = np.linspace(0, 10.0, len(toys))
+
+    pp.bar(xvals, speedups, bottom=0, width=width, log=True)
+    pp.xticks(np.array(xvals) + width / 2, np.exp(xvals))
+    xmin, xmax = pp.xlim()
+    pp.hlines(1.0, xmin, xmax)  # Break even
+    pp.xlim(xmin, xmax)
+    pp.ylabel("Speedup")
+    pp.xlabel(xlabel)
+    print xlabels
+    print speedups
+
+
+def main2():
+    c = Compare()
+    c.calculate_gold()
+    c.calculate_repeat()
+
+    with open('qaunt_results.stat.pickl', 'w') as f:
+        pickle.dump(c, f)
 
 def main():
-    c = Compare(20)
+    c = Compare()
     c.calculate_gold()
     c.calculate_lpt()
+    c.calculate_ll()
 
-    with open('quant_results.pickl', 'w') as f:
+    with open('quant_results2.pickl', 'w') as f:
         pickle.dump(c, f)
 
 
 if __name__ == "__main__":
-    main()
+    main2()
 
 
 
