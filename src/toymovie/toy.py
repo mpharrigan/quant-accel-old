@@ -17,10 +17,6 @@ import re
 
 ERROR_CUTOFF = 2.0
 
-def _error_func_model(err, a, tau):
-    # TODO: rename _time_vs_error
-    return -tau * 1.e5 * np.log(err / a)
-
 def _error_vs_time(time, a, tau):
     return a * np.exp(-time / (tau * 1.e2))
 
@@ -131,27 +127,6 @@ class Gold(ToySim):
 
         self.wall_steps = load_end
         return traj_list
-
-
-    def fit_error(self):
-        assert self.errors is not None, 'Calculate errors before fitting.'
-
-        # Optimize
-        popt, _ = optimize.curve_fit(_error_func_model, self.errors[:, 1], self.errors[:, 0])
-        print "Optimized parameters", popt
-
-        self.popt = popt
-
-
-
-    def plot_fit(self):
-        pp.plot(self.errors[:, 1], self.errors[:, 0], 'bo')
-        xmin, xmax = pp.xlim()
-        xs = np.linspace(1.e-4, xmax)
-        pp.plot(xs, _error_func_model(xs, *self.popt), 'r')
-        pp.xlim(xmin, xmax)
-        pp.xlabel('Error')
-        pp.ylabel('Walltime')
 
     def get_name(self):
         return "Gold"
@@ -329,10 +304,6 @@ def ll_dir_to_x(fn):
     x = int(reres.group(0))
     return np.log(x)
 
-def get_speedup1(toy, popt):
-    er = toy.errors[-1, 1]
-    speedup = _error_func_model(er, *popt) / toy.wall_steps
-    return speedup
 
 def get_speedup2(toy, popt_gold, p0=None, error_val=0.4):
     # Optimize
@@ -376,27 +347,20 @@ def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.
     print speedups
 
 
-# def main2():
-#     c = Compare()
-#     c.calculate_gold()
-#     c.calculate_repeat()
-#
-#     with open('quant_results.stat.pickl', 'w') as f:
-#         pickle.dump(c, f)
-
 def main():
-    c = Compare()
+    c = Compare(lag_time=60, n_timescales=3)
+    output_fn = "quant_results.lt{}.it{}".format(c.good_lag_time, c.n_timescales)
     c.calculate_gold()
     c.calculate_lpt()
     c.calculate_ll()
     c.calculate_repeat()
 
-    with open('quant_results.pickl', 'w') as f:
+    with open(output_fn, 'w') as f:
         pickle.dump(c, f)
 
 
 if __name__ == "__main__":
-    print "Not configured to do anything."
+    main()
 
 
 
