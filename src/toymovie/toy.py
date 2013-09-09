@@ -28,7 +28,7 @@ def _time_vs_error(err, a, tau):
     return -tau * 1.e2 * np.log(err / a)
 
 class ToySim(object):
-    def __init__(self, directory, distance_cutoff=0.25, n_medoid_iters=1, n_timescales=1):
+    def __init__(self, directory, n_timescales, distance_cutoff=0.25, n_medoid_iters=1):
         self.directory = directory
         self.distance_cutoff = distance_cutoff
         self.n_medoid_iters = n_medoid_iters
@@ -153,12 +153,15 @@ class Gold(ToySim):
         pp.xlabel('Error')
         pp.ylabel('Walltime')
 
+    def get_name(self):
+        return "Gold"
+
 
 
 class LPT(ToySim):
 
-    def __init__(self, directory):
-        super(LPT, self).__init__(directory)
+    def __init__(self, directory, n_timescales):
+        super(LPT, self).__init__(directory, n_timescales)
         self.models = None
 
     def get_models(self, db_fn='db.sqlite'):
@@ -212,6 +215,11 @@ class LPT(ToySim):
         self.wall_steps = self.traj_len * (model_i + 1)
         return traj_list
 
+    def get_name(self):
+        fn = self.directory
+        fn = fn[fn.rfind('/') + 1:]
+        return fn
+
     # Don't pickle unneccesary things
     def __getstate__(self):
         state = super(LPT, self).__getstate__()
@@ -224,16 +232,17 @@ class LPT(ToySim):
 
 class Compare(object):
 
-    def __init__(self):
-        self.good_lag_time = 60
+    def __init__(self, lag_time, n_timescales):
+        self.good_lag_time = lag_time
+        self.n_timescales = n_timescales
 
     def calculate_gold(self):
-        gold = Gold('quant/gold-run/gold/')
+        gold = Gold('quant/gold-run/gold/', self.n_timescales)
         load_stride = 10
         gold.good_lag_time = self.good_lag_time // load_stride
         traj_list = gold.load_trajs(load_stride=load_stride, load_up_to_this_percent=1.0)
         clusterer = gold.do_clustering(traj_list)
-        gold.gold_its = gold.get_implied_timescales(clusterer, lag_time=gold.good_lag_time, n_timescales=1)
+        gold.gold_its = gold.get_implied_timescales(clusterer, lag_time=gold.good_lag_time, n_timescales=self.n_timescales)
 
         gold.get_error_vs_time(load_stride=load_stride, n_points=25, start_percent=5)
         gold.fit_error()
@@ -252,7 +261,7 @@ class Compare(object):
         lpt_list = list()
         for i in xrange(len(lpt_dirs)):
             try:
-                lpt = LPT(os.path.join('quant/lpt-run/', lpt_dirs[i]))
+                lpt = LPT(os.path.join('quant/lpt-run/', lpt_dirs[i]), self.n_timescales)
                 lpt.good_lag_time = self.good_lag_time
                 lpt.gold_its = self.gold.gold_its
                 lpt.get_models()
@@ -260,6 +269,7 @@ class Compare(object):
                 lpt.cleanup()
                 lpt_list.append(lpt)
             except:
+                print "+++ Errored in lpt +++", lpt_dirs[i]
                 pass
 
         self.lpt_list = lpt_list
@@ -274,7 +284,7 @@ class Compare(object):
         ll_list = list()
         for i in xrange(len(ll_dirs)):
             try:
-                ll = LPT(os.path.join('quant/parallelism-run/', ll_dirs[i]))
+                ll = LPT(os.path.join('quant/parallelism-run/', ll_dirs[i]), self.n_timescales)
                 ll.good_lag_time = self.good_lag_time
                 ll.gold_its = self.gold.gold_its
                 ll.get_models()
@@ -282,6 +292,7 @@ class Compare(object):
                 ll.cleanup()
                 ll_list.append(ll)
             except:
+                print "+++ Errored in ll +++", ll_dirs[i]
                 pass
 
         self.ll_list = ll_list
@@ -293,7 +304,7 @@ class Compare(object):
         stat_list = list()
         for i in xrange(len(stat_dirs)):
             try:
-                ss = LPT(os.path.join('quant/stat-run', stat_dirs[i]))
+                ss = LPT(os.path.join('quant/stat-run', stat_dirs[i]), self.n_timescales)
                 ss.good_lag_time = self.good_lag_time
                 ss.gold_its = self.gold.gold_its
                 ss.get_models()
@@ -301,11 +312,9 @@ class Compare(object):
                 ss.cleanup()
                 stat_list.append(ss)
             except:
-                print "+++ Errored +++"
+                print "+++ Errored in stat+++", stat_dirs[i]
                 pass
         self.stat_list = stat_list
-
-
 
 
 def lpt_dir_to_x(fn):
@@ -332,11 +341,12 @@ def get_speedup2(toy, popt_gold, p0=None, error_val=0.4):
     return speedup
 
 def tfit(toy, p0=None):
+    ax = pp.gca()
     popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
     xs = np.linspace(1, toy.errors[-1, 0])
     ys = _error_vs_time(xs, *popt_toy)
-    pp.plot(toy.errors[:, 0], toy.errors[:, 1], 'o')
-    pp.plot(xs, ys)
+    ax.plot(toy.errors[:, 0], toy.errors[:, 1], 'o', label=toy.get_name())
+    ax.plot(xs, ys, color=ax.lines[-1].get_color())
     print popt_toy
     return popt_toy
 
@@ -346,8 +356,6 @@ def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.
     xlabels = list()
     colors = list()
     for toy in toys:
-
-        # speedups.append(get_speedup1(toy,popt))
         speedups.append(get_speedup2(toy, popt_gold, p0, error_val))
 
         if directory_to_x_func is not None:
@@ -368,26 +376,27 @@ def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.
     print speedups
 
 
-def main2():
-    c = Compare()
-    c.calculate_gold()
-    c.calculate_repeat()
-
-    with open('qaunt_results.stat.pickl', 'w') as f:
-        pickle.dump(c, f)
+# def main2():
+#     c = Compare()
+#     c.calculate_gold()
+#     c.calculate_repeat()
+#
+#     with open('quant_results.stat.pickl', 'w') as f:
+#         pickle.dump(c, f)
 
 def main():
     c = Compare()
     c.calculate_gold()
     c.calculate_lpt()
     c.calculate_ll()
+    c.calculate_repeat()
 
-    with open('quant_results2.pickl', 'w') as f:
+    with open('quant_results.pickl', 'w') as f:
         pickle.dump(c, f)
 
 
 if __name__ == "__main__":
-    main2()
+    print "Not configured to do anything."
 
 
 
