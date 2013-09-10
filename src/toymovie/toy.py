@@ -14,8 +14,8 @@ from msmaccelerator.core import markovstatemodel
 from scipy import optimize
 import pickle
 import re
+import sys
 
-ERROR_CUTOFF = 2.0
 
 def _error_vs_time(time, a, tau):
     return a * np.exp(-time / (tau * 1.e2))
@@ -23,56 +23,68 @@ def _error_vs_time(time, a, tau):
 def _time_vs_error(err, a, tau):
     return -tau * 1.e2 * np.log(err / a)
 
+def get_implied_timescales(self, t_matrix, lag_time, n_timescales):
+    """Get implied timescales at a particular lag time."""
+    implied_timescales = analysis.get_implied_timescales(t_matrix, n_timescales, lag_time)
+    print "Calculated implied timescale at lag time {}".format(lag_time)
+    return implied_timescales
+
 class ToySim(object):
-    def __init__(self, directory, n_timescales, distance_cutoff=0.25, n_medoid_iters=1):
+    """Contains data for one toy simulation run."""
+
+    def __init__(self, directory, clusterer):
         self.directory = directory
-        self.distance_cutoff = distance_cutoff
-        self.n_medoid_iters = n_medoid_iters
-        self.n_timescales = n_timescales
+        self.clusterer = clusterer
 
 
-    def do_clustering(self, traj_list):
-        trajs = get_data.get_shimtraj_from_trajlist(traj_list)
+    def build_msm(self, lag_time=None):
+        """Build an MSM from the loaded trajectories."""
+        if lag_time is None:
+            lag_time = self.good_lag_time
+
+        # Do assignment
+        trajs = get_data.get_shimtraj_from_trajlist(self.traj_list)
         metric = classic.Euclidean2d()
 
-        clustering.logger.setLevel('WARNING')
-        hkm = clustering.HybridKMedoids(metric, trajs, k=None, distance_cutoff=self.distance_cutoff, local_num_iters=self.n_medoid_iters)
-        self.n_clusters = hkm.get_generators_as_traj()['XYZList'].shape[0]
+        # Allocate array
+        n_trajs = len(self.traj_list)
+        max_traj_len = max([t.shape[0] for t in self.traj_list])
+        assignments = -1 * np.ones((n_trajs, max_traj_len), dtype='int')
 
-        print "Clustered data into {:,} clusters".format(self.n_clusters)
-        return hkm
+        # Prepare generators
+        pgens = metric.prepare_trajectory(self.clusterer.get_generators_as_traj())
 
-    def build_msm(self, clusterer, lag_time):
-        """Build an MSM from the loaded trajectories."""
-        counts = msml.get_count_matrix_from_assignments(clusterer.get_assignments(), self.n_clusters, lag_time)
+        for i, traj in enumerate(trajs):
+            ptraj = metric.prepare_trajectory(traj)
+
+            for j in xrange(len(traj)):
+                d = metric.one_to_all(ptraj, pgens, j)
+                assignments[i, j] = np.argmin(d)
+
+        counts = msml.get_count_matrix_from_assignments(assignments, self.n_clusters, lag_time)
         rev_counts, t_matrix, populations, mapping = msml.build_msm(counts)
         return t_matrix
 
-    def get_implied_timescales(self, clusterer, lag_time, n_timescales):
-        """Get implied timescales at a particular lag time."""
-        t_matrix = self.build_msm(clusterer, lag_time)
-        implied_timescales = analysis.get_implied_timescales(t_matrix, n_timescales, lag_time * self.load_stride)
-        print "Calculated implied timescale at lag time {}".format(lag_time)
-        return implied_timescales
 
-    def get_error_vs_time(self, start_percent=5, n_points=10, load_stride=1):
-        percents = np.linspace(start_percent / 100., 1.0, n_points)
 
-        errors = np.zeros((len(percents), 2))
-        for i in xrange(len(percents)):
-            percent = percents[i]
-            traj_list = self.load_trajs(load_stride=load_stride, load_up_to_this_percent=percent)
-            clusterer = self.do_clustering(traj_list)
-            its = self.get_implied_timescales(clusterer, lag_time=self.good_lag_time, n_timescales=self.n_timescales)
-
-            # Calculate error
-            evec = np.log(its) - np.log(self.gold_its)
-            errors[i][1] = np.sqrt(np.dot(evec, evec))
-            errors[i][0] = self.wall_steps
-
-            print "Calculated error from using {}% of all data".format(percent * 100.)
-
-        self.errors = errors
+#     def get_error_vs_time(self, start_percent=5, n_points=10, load_stride=1):
+#         percents = np.linspace(start_percent / 100., 1.0, n_points)
+#
+#         errors = np.zeros((len(percents), 2))
+#         for i in xrange(len(percents)):
+#             percent = percents[i]
+#             traj_list = self.load_trajs(load_stride=load_stride, load_up_to_this_percent=percent)
+#             clusterer = self.do_clustering(traj_list)
+#             its = self.get_implied_timescales(clusterer, lag_time=self.good_lag_time, n_timescales=self.n_timescales)
+#
+#             # Calculate error
+#             evec = np.log(its) - np.log(self.gold_its)
+#             errors[i][1] = np.sqrt(np.dot(evec, evec))
+#             errors[i][0] = self.wall_steps
+#
+#             print "Calculated error from using {}% of all data".format(percent * 100.)
+#
+#         self.errors = errors
 
     def get_implied_timescales_vs_lt(self, clusterer, range_tuple, n_timescales=4):
         """Get implied timescales vs lag time."""
@@ -101,7 +113,7 @@ class ToySim(object):
     def __getstate__(self):
         state = dict(self.__dict__)
         try:
-            del state['gold_walltime']
+            pass
         except KeyError:
             pass
         return state
@@ -124,9 +136,30 @@ class Gold(ToySim):
             traj_len = traj_list[0].shape[0]
             print "{} trajs x {:,} length = {:,} frames".format(n_trajs, traj_len, n_trajs * traj_len)
 
+        wall_steps = load_end
+        self.traj_list = traj_list
+        return wall_steps
 
-        self.wall_steps = load_end
-        return traj_list
+    def calculate_tmatrices(self, n_points=15, lag_time=None):
+        if lag_time is None:
+            lag_time = self.good_lag_time
+        else:
+            self.good_lag_time = lag_time
+
+        percents = np.linspace(0.01, 1.0, n_points)
+
+        t_matrices = list()
+        for percent in percents:
+            try:
+                wall_steps = self.load_trajs(load_stride=1, load_up_to_this_percent=percent)
+                t_matrix = self.build_msm(lag_time)
+                t_matrices.append((wall_steps, t_matrix))
+
+                print "Built MSM from gold using {:.2f}% of data".format(100.*percent)
+            except:
+                print "Couldn't build msm {} using {:.2f}% of data".format(self.get_name(), 100.*percent)
+
+        self.t_matrices = t_matrices
 
     def get_name(self):
         return "Gold"
@@ -135,17 +168,25 @@ class Gold(ToySim):
 
 class LPT(ToySim):
 
-    def __init__(self, directory, n_timescales):
-        super(LPT, self).__init__(directory, n_timescales)
-        self.models = None
+    def __init__(self, directory, clusterer):
+        super(LPT, self).__init__(directory, clusterer)
 
-    def get_models(self, db_fn='db.sqlite'):
+        self._get_trajs_fns()
+
+    def _get_trajs_fns(self, db_fn='db.sqlite'):
+        """Save trajectory filenames per round of simulation.
+
+        This function loads the msmaccelerator database file
+        and uses the models table to enumerate rounds. From each
+        model, the trajectories generated up to that point
+        are saved.
+        """
         connection = sql.connect(os.path.join(self.directory, db_fn))
         cursor = connection.cursor()
         cursor.execute('select path from models order by time asc')
         model_fns = cursor.fetchall()
 
-        models = list()
+        rounds = list()
         for fn in model_fns:
             # Unpack tuple
             fn = fn[0]
@@ -153,32 +194,26 @@ class LPT(ToySim):
             fn = fn[fn.find(self.directory):]
             # Load model
             model = markovstatemodel.MarkovStateModel.load(fn)
-
-            for i in xrange(len(model.traj_filenames)):
-                tfn = model.traj_filenames[i]
-                model.traj_filenames[i] = tfn[tfn.find(self.directory):]
-
-            models.append(model)
-
-        self.models = models
-
-    def cleanup(self):
-        for model in self.models:
+            # Get relative paths
+            traj_filenames = [tfn[tfn.find(self.directory):] for tfn in model.traj_filenames]
+            # Save trajectory filenames
+            rounds.append(traj_filenames)
+            # Cleanup
             model.close()
 
+        self.rounds = rounds
 
-    def load_trajs(self, load_stride, load_up_to_this_percent=1.0, verbose=True):
+
+    def load_trajs(self, load_stride, round_i, verbose=True):
         self.load_stride = load_stride
-        assert load_up_to_this_percent <= 1.0, 'Must load less than 100%'
-        assert self.models is not None, 'Please load models first'
 
-        model_i = int(load_up_to_this_percent * (len(self.models) - 1))
-        print "Using trajectories after round {}".format(model_i + 1)
-        model = self.models[model_i]
+        assert self.rounds is not None, 'Please load rounds first'
+        assert round_i < len(self.rounds), 'Round index out of range %' % round_i
 
-        traj_list = get_data.get_trajs_from_fn_list(model.traj_filenames)
+        print "Using trajectories after round {}".format(round_i + 1)
+
+        traj_list = get_data.get_trajs_from_fn_list(self.rounds[round_i])
         traj_list = [traj[::load_stride] for traj in traj_list]
-
 
         # Stats
         self.traj_len = traj_list[0].shape[0]
@@ -187,10 +222,29 @@ class LPT(ToySim):
             print "{} trajs x {:,} length = {:,} frames".format(self.n_trajs, self.traj_len, self.n_trajs * self.traj_len)
 
 
-        self.wall_steps = self.traj_len * (model_i + 1)
-        return traj_list
+        self.traj_list = traj_list
+        wall_steps = self.traj_len * (round_i + 1)
+        return wall_steps
+
+    def calculate_tmatrices(self, lag_time=None):
+        if lag_time is None:
+            lag_time = self.good_lag_time
+
+        t_matrices = list()
+        for round_i in xrange(len(self.rounds)):
+            try:
+                wall_steps = self.load_trajs(load_stride=1, round_i=round_i)
+                t_matrix = self.build_msm(lag_time)
+                t_matrices.append((wall_steps, t_matrix))
+
+                print "Built MSM from round {}".format(round_i + 1)
+            except:
+                 print "Couldn't build msm {} after round {}".format(self.get_name(), round_i + 1)
+
+        self.t_matrices = t_matrices
 
     def get_name(self):
+        """Get a display name. We take this from the directory name."""
         fn = self.directory
         fn = fn[fn.rfind('/') + 1:]
         return fn
@@ -199,7 +253,7 @@ class LPT(ToySim):
     def __getstate__(self):
         state = super(LPT, self).__getstate__()
         try:
-            del state['models']
+            pass
         except KeyError:
             pass
         return state
@@ -207,21 +261,57 @@ class LPT(ToySim):
 
 class Compare(object):
 
-    def __init__(self, lag_time, n_timescales):
-        self.good_lag_time = lag_time
-        self.n_timescales = n_timescales
+    def __init__(self):
+        pass
 
-    def calculate_gold(self):
-        gold = Gold('quant/gold-run/gold/', self.n_timescales)
-        load_stride = 10
-        gold.good_lag_time = self.good_lag_time // load_stride
-        traj_list = gold.load_trajs(load_stride=load_stride, load_up_to_this_percent=1.0)
-        clusterer = gold.do_clustering(traj_list)
-        gold.gold_its = gold.get_implied_timescales(clusterer, lag_time=gold.good_lag_time, n_timescales=self.n_timescales)
+    def do_clustering(self, distance_cutoff, n_medoid_iters):
+        gold = Gold('quant/gold-run/gold', clusterer=None)
+        gold.load_trajs(1, 1.0)
+        trajs = get_data.get_shimtraj_from_trajlist(gold.traj_list)
+        metric = classic.Euclidean2d()
 
-        gold.get_error_vs_time(load_stride=load_stride, n_points=25, start_percent=5)
+        clustering.logger.setLevel('WARNING')
+        hkm = clustering.HybridKMedoids(metric, trajs, k=None, distance_cutoff=distance_cutoff, local_num_iters=n_medoid_iters)
+        self.n_clusters = hkm.get_generators_as_traj()['XYZList'].shape[0]
 
+        print "Clustered data into {:,} clusters".format(self.n_clusters)
+        gold.clusterer = hkm
         self.gold = gold
+
+
+    def calculate_implied_timescales(self, lag_times, n_timescales):
+        implied_timescales = list()
+        for lag_time in lag_times:
+            t_matrix = self.gold.build_msm(lag_time)
+            it = analysis.get_implied_timescales(t_matrix, n_timescales, lag_time)
+            implied_timescales.append((lag_time, it))
+
+        self.implied_timescales = implied_timescales
+
+    def calculate_all_tmatrices(self, lag_time):
+
+        # Gold
+        self.gold.calculate_tmatrices(lag_time)
+
+        self.ll_list = list()
+        self.lpt_list = list()
+
+        # Do length per traj
+        lpt_dirs = self.get_lpt_dirs()
+        for lpt_dir in lpt_dirs:
+            lpt = LPT(lpt_dir, self.gold.clusterer)
+            lpt.calculate_tmatrices(lag_time)
+            self.lpt_list.append(lpt)
+
+        # Do parallel
+        ll_dirs = self.get_ll_dirs()
+        for ll_dir in lpt_dirs:
+            ll = LPT(ll_dir, self.gold.clusterer)
+            ll.calculate_tmatrices(lag_time)
+            self.ll_list.append(ll)
+
+
+
 
     def calculate_lpt(self):
         lpt_dirs = [
@@ -238,7 +328,7 @@ class Compare(object):
                 lpt = LPT(os.path.join('quant/lpt-run/', lpt_dirs[i]), self.n_timescales)
                 lpt.good_lag_time = self.good_lag_time
                 lpt.gold_its = self.gold.gold_its
-                lpt.get_models()
+                lpt.get_trajs_fns()
                 lpt.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
                 lpt.cleanup()
                 lpt_list.append(lpt)
@@ -261,7 +351,7 @@ class Compare(object):
                 ll = LPT(os.path.join('quant/parallelism-run/', ll_dirs[i]), self.n_timescales)
                 ll.good_lag_time = self.good_lag_time
                 ll.gold_its = self.gold.gold_its
-                ll.get_models()
+                ll.get_trajs_fns()
                 ll.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
                 ll.cleanup()
                 ll_list.append(ll)
@@ -281,7 +371,7 @@ class Compare(object):
                 ss = LPT(os.path.join('quant/stat-run', stat_dirs[i]), self.n_timescales)
                 ss.good_lag_time = self.good_lag_time
                 ss.gold_its = self.gold.gold_its
-                ss.get_models()
+                ss.get_trajs_fns()
                 ss.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
                 ss.cleanup()
                 stat_list.append(ss)
@@ -346,16 +436,49 @@ def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.
     print speedups
 
 
-def main():
-    c = Compare(lag_time=60, n_timescales=3)
-    output_fn = "quant_results.lt{}.it{}.pickl".format(c.good_lag_time, c.n_timescales)
-    c.calculate_gold()
-    c.calculate_lpt()
-    c.calculate_ll()
-    c.calculate_repeat()
+# def main():
+#     c = Compare(lag_time=60, n_timescales=3)
+#     output_fn = "quant_results.lt{}.it{}.pickl".format(c.good_lag_time, c.n_timescales)
+#     c.calculate_gold()
+#     c.calculate_lpt()
+#     c.calculate_ll()
+#     c.calculate_repeat()
+#
+#     with open(output_fn, 'w') as f:
+#         pickle.dump(c, f)
 
-    with open(output_fn, 'w') as f:
+def main(options):
+    if os.path.exists('results.pickl'):
+        with open('results.pickl', 'r') as f:
+            c = pickle.load(f)
+    else:
+        c = Compare()
+
+    if '1' in options:
+        c.do_clustering(distance_cutoff=0.25, n_medoid_iters=10)
+    if '2' in options:
+        c.calculate_implied_timescales(lag_times=xrange(1, 100, 5), n_timescales=3)
+    if '3' in options:
+        c.calculate_all_tmatrices(lag_time=60)
+    if '4' in options:
+        # TODO: Implement
+        pass
+
+    with open('results.pickl', 'w') as f:
         pickle.dump(c, f)
+
+def parse():
+    print """Quantitative analysis for adaptive sampling on the muller potential.
+
+        Include the following options:
+         1 - Do clustering
+         2 - Calculate ITs
+         3 - Calculate transition matrices (x3)
+         4 - Apply func to transition matricies to get error
+    """
+    if len(sys.argv) > 1:
+        main(sys.argv[1])
+
 
 
 if __name__ == "__main__":
