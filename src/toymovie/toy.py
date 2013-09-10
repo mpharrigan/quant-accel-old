@@ -4,17 +4,17 @@ Created on Sep 5, 2013
 @author: harrigan
 '''
 from fuzzy import classic, analysis, get_data
-
 from matplotlib import pyplot as pp
-import os
-import numpy as np
-from msmbuilder import clustering, MSMLib as msml
-import sqlite3 as sql
 from msmaccelerator.core import markovstatemodel
+from msmbuilder import clustering, MSMLib as msml
 from scipy import optimize
+import numpy as np
+import os
 import pickle
 import re
+import sqlite3 as sql
 import sys
+
 
 
 def _error_vs_time(time, a, tau):
@@ -23,7 +23,7 @@ def _error_vs_time(time, a, tau):
 def _time_vs_error(err, a, tau):
     return -tau * 1.e2 * np.log(err / a)
 
-def get_implied_timescales(self, t_matrix, lag_time, n_timescales):
+def get_implied_timescales(t_matrix, lag_time, n_timescales):
     """Get implied timescales at a particular lag time."""
     implied_timescales = analysis.get_implied_timescales(t_matrix, n_timescales, lag_time)
     print "Calculated implied timescale at lag time {}".format(lag_time)
@@ -36,11 +36,20 @@ class ToySim(object):
         self.directory = directory
         self.clusterer = clusterer
 
+        # Other Attributes
+        self.traj_list = list()
+        self.good_lag_time = None
+        self.t_matrices = list()
+        self.load_stride = 1
+
+
 
     def build_msm(self, lag_time=None):
         """Build an MSM from the loaded trajectories."""
         if lag_time is None:
             lag_time = self.good_lag_time
+        else:
+            self.good_lag_time = lag_time
 
         # Do assignment
         trajs = get_data.get_shimtraj_from_trajlist(self.traj_list)
@@ -61,7 +70,7 @@ class ToySim(object):
                 d = metric.one_to_all(ptraj, pgens, j)
                 assignments[i, j] = np.argmin(d)
 
-        counts = msml.get_count_matrix_from_assignments(assignments, self.n_clusters, lag_time)
+        counts = msml.get_count_matrix_from_assignments(assignments, n_states=None, lag_time=lag_time)
         rev_counts, t_matrix, populations, mapping = msml.build_msm(counts)
         return t_matrix
 
@@ -86,28 +95,28 @@ class ToySim(object):
 #
 #         self.errors = errors
 
-    def get_implied_timescales_vs_lt(self, clusterer, range_tuple, n_timescales=4):
-        """Get implied timescales vs lag time."""
-        lt_range = range(*range_tuple)
-        implied_timescales = np.zeros((len(lt_range), n_timescales))
+#     def get_implied_timescales_vs_lt(self, clusterer, range_tuple, n_timescales=4):
+#         """Get implied timescales vs lag time."""
+#         lt_range = range(*range_tuple)
+#         implied_timescales = np.zeros((len(lt_range), n_timescales))
+#
+#         for i in xrange(len(lt_range)):
+#             implied_timescales[i] = self.get_implied_timescales(clusterer, lag_time=lt_range[i], n_timescales=n_timescales)
+#             print "Calculated implied timescale at lag time {}".format(lt_range[i])
+#
+#         self.implied_timescales = implied_timescales
+#         self.lt_range = lt_range
 
-        for i in xrange(len(lt_range)):
-            implied_timescales[i] = self.get_implied_timescales(clusterer, lag_time=lt_range[i], n_timescales=n_timescales)
-            print "Calculated implied timescale at lag time {}".format(lt_range[i])
 
-        self.implied_timescales = implied_timescales
-        self.lt_range = lt_range
+#     def plot_implied_timescales_vs_lt(self):
+#         for i in xrange(self.implied_timescales.shape[1]):
+#             pp.scatter(self.lt_range, self.implied_timescales[:, i])
+#         pp.yscale('log')
 
-
-    def plot_implied_timescales_vs_lt(self):
-        for i in xrange(self.implied_timescales.shape[1]):
-            pp.scatter(self.lt_range, self.implied_timescales[:, i])
-        pp.yscale('log')
-
-    def plot_errors(self):
-        pp.plot(self.errors[:, 0], self.errors[:, 1], 'bo')
-        pp.xlabel('Walltime')
-        pp.ylabel('Error')
+#     def plot_errors(self):
+#         pp.plot(self.errors[:, 0], self.errors[:, 1], 'bo')
+#         pp.xlabel('Walltime')
+#         pp.ylabel('Error')
 
 
     def __getstate__(self):
@@ -171,6 +180,8 @@ class LPT(ToySim):
     def __init__(self, directory, clusterer):
         super(LPT, self).__init__(directory, clusterer)
 
+        self.rounds = None
+
         self._get_trajs_fns()
 
     def _get_trajs_fns(self, db_fn='db.sqlite'):
@@ -208,7 +219,7 @@ class LPT(ToySim):
         self.load_stride = load_stride
 
         assert self.rounds is not None, 'Please load rounds first'
-        assert round_i < len(self.rounds), 'Round index out of range %' % round_i
+        assert round_i < len(self.rounds), 'Round index out of range %d' % round_i
 
         print "Using trajectories after round {}".format(round_i + 1)
 
@@ -216,19 +227,21 @@ class LPT(ToySim):
         traj_list = [traj[::load_stride] for traj in traj_list]
 
         # Stats
-        self.traj_len = traj_list[0].shape[0]
-        self.n_trajs = len(traj_list)
+        traj_len = traj_list[0].shape[0]
+        n_trajs = len(traj_list)
         if verbose:
-            print "{} trajs x {:,} length = {:,} frames".format(self.n_trajs, self.traj_len, self.n_trajs * self.traj_len)
+            print "{} trajs x {:,} length = {:,} frames".format(n_trajs, traj_len, n_trajs * traj_len)
 
 
         self.traj_list = traj_list
-        wall_steps = self.traj_len * (round_i + 1)
+        wall_steps = traj_len * (round_i + 1)
         return wall_steps
 
     def calculate_tmatrices(self, lag_time=None):
         if lag_time is None:
             lag_time = self.good_lag_time
+        else:
+            self.good_lag_time = lag_time
 
         t_matrices = list()
         for round_i in xrange(len(self.rounds)):
@@ -239,7 +252,7 @@ class LPT(ToySim):
 
                 print "Built MSM from round {}".format(round_i + 1)
             except:
-                 print "Couldn't build msm {} after round {}".format(self.get_name(), round_i + 1)
+                print "Couldn't build msm {} after round {}".format(self.get_name(), round_i + 1)
 
         self.t_matrices = t_matrices
 
@@ -262,7 +275,11 @@ class LPT(ToySim):
 class Compare(object):
 
     def __init__(self):
-        pass
+        self.gold = None
+        self.ll_list = None
+        self.lpt_list = None
+        self.n_clusters = None
+        self.implied_timescales = None
 
     def do_clustering(self, distance_cutoff, n_medoid_iters):
         gold = Gold('quant/gold-run/gold', clusterer=None)
@@ -305,7 +322,7 @@ class Compare(object):
 
         # Do parallel
         ll_dirs = self.get_ll_dirs()
-        for ll_dir in lpt_dirs:
+        for ll_dir in ll_dirs:
             ll = LPT(ll_dir, self.gold.clusterer)
             ll.calculate_tmatrices(lag_time)
             self.ll_list.append(ll)
@@ -313,7 +330,7 @@ class Compare(object):
 
 
 
-    def calculate_lpt(self):
+    def get_lpt_dirs(self):
         lpt_dirs = [
                     'lpt-250-120',
                     'lpt-500-60',
@@ -322,63 +339,38 @@ class Compare(object):
                     'lpt-6000-5',
                     'lpt-30000-1'
                     ]
-        lpt_list = list()
-        for i in xrange(len(lpt_dirs)):
-            try:
-                lpt = LPT(os.path.join('quant/lpt-run/', lpt_dirs[i]), self.n_timescales)
-                lpt.good_lag_time = self.good_lag_time
-                lpt.gold_its = self.gold.gold_its
-                lpt.get_trajs_fns()
-                lpt.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
-                lpt.cleanup()
-                lpt_list.append(lpt)
-            except:
-                print "+++ Errored in lpt +++", lpt_dirs[i]
-                pass
 
-        self.lpt_list = lpt_list
+        lpt_dirs = [os.path.join('quant/lpt-run/', lpt) for lpt in lpt_dirs]
+        return lpt_dirs
 
-    def calculate_ll(self):
+    def get_ll_dirs(self):
         ll_dirs = os.listdir('quant/parallelism-run')
         ll_dirs = [ll  for ll in ll_dirs if ll.startswith('ll-')]
         def sort_by_end(s):
             return int(s[s.rfind('-') + 1:])
         ll_dirs = sorted(ll_dirs, key=sort_by_end)
+        ll_dirs = [os.path.join('quant/parallelism-run/', ll) for ll in ll_dirs]
 
-        ll_list = list()
-        for i in xrange(len(ll_dirs)):
-            try:
-                ll = LPT(os.path.join('quant/parallelism-run/', ll_dirs[i]), self.n_timescales)
-                ll.good_lag_time = self.good_lag_time
-                ll.gold_its = self.gold.gold_its
-                ll.get_trajs_fns()
-                ll.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
-                ll.cleanup()
-                ll_list.append(ll)
-            except:
-                print "+++ Errored in ll +++", ll_dirs[i]
-                pass
+        return ll_dirs
 
-        self.ll_list = ll_list
-
-    def calculate_repeat(self):
-        stat_dirs = os.listdir('quant/stat-run')
-        stat_dirs = [ss for ss in stat_dirs if ss.startswith('stat-')]
-
-        stat_list = list()
-        for i in xrange(len(stat_dirs)):
-            try:
-                ss = LPT(os.path.join('quant/stat-run', stat_dirs[i]), self.n_timescales)
-                ss.good_lag_time = self.good_lag_time
-                ss.gold_its = self.gold.gold_its
-                ss.get_trajs_fns()
-                ss.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
-                ss.cleanup()
-                stat_list.append(ss)
-            except:
-                print "+++ Errored in stat+++", stat_dirs[i]
-                pass
-        self.stat_list = stat_list
+#     def calculate_repeat(self):
+#         stat_dirs = os.listdir('quant/stat-run')
+#         stat_dirs = [ss for ss in stat_dirs if ss.startswith('stat-')]
+#
+#         stat_list = list()
+#         for i in xrange(len(stat_dirs)):
+#             try:
+#                 ss = LPT(os.path.join('quant/stat-run', stat_dirs[i]), self.n_timescales)
+#                 ss.good_lag_time = self.good_lag_time
+#                 ss.gold_its = self.gold.gold_its
+#                 ss.get_trajs_fns()
+#                 ss.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
+#                 ss.cleanup()
+#                 stat_list.append(ss)
+#             except:
+#                 print "+++ Errored in stat+++", stat_dirs[i]
+#                 pass
+#         self.stat_list = stat_list
 
 
 def lpt_dir_to_x(fn):
@@ -414,7 +406,6 @@ def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.
     speedups = list()
     xvals = list()
     xlabels = list()
-    colors = list()
     for toy in toys:
         speedups.append(get_speedup2(toy, popt_gold, p0, error_val))
 
@@ -482,7 +473,7 @@ def parse():
 
 
 if __name__ == "__main__":
-    main()
+    parse()
 
 
 
