@@ -19,7 +19,7 @@ The following shows speedup vs. number of parallel simulations
 ![ll](https://raw.github.com/mpharrigan/toy-movie-2/master/ll.png)
 
 The following shows error over time with uncertainty. An adaptive simulation was run 100 times
-to gather statistics. $error = abs(ln(IT_gold / IT_calc))$
+to gather statistics. $$error = abs(ln(IT_gold / IT_calc))$$
 
 ![stat](https://raw.github.com/mpharrigan/toy-movie-2/master/stat.png)
 
