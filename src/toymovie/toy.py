@@ -220,7 +220,6 @@ class Compare(object):
         gold.gold_its = gold.get_implied_timescales(clusterer, lag_time=gold.good_lag_time, n_timescales=self.n_timescales)
 
         gold.get_error_vs_time(load_stride=load_stride, n_points=25, start_percent=5)
-        gold.fit_error()
 
         self.gold = gold
 
@@ -349,7 +348,7 @@ def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.
 
 def main():
     c = Compare(lag_time=60, n_timescales=3)
-    output_fn = "quant_results.lt{}.it{}".format(c.good_lag_time, c.n_timescales)
+    output_fn = "quant_results.lt{}.it{}.pickl".format(c.good_lag_time, c.n_timescales)
     c.calculate_gold()
     c.calculate_lpt()
     c.calculate_ll()
