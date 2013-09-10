@@ -12,7 +12,7 @@ Speedup is defined as the walltime gain by using the adaptive sampling method gi
 The following shows speedup vs length-per-trajectory. This compares short-many vs long-few. A length per trajectory
 lower than 1000 gave insufficient counts for building a reliable MSM
 
-![lpt](https://raw.github.com/mpharrigan/toy-movie-2/master/ll.png)
+![lpt](https://raw.github.com/mpharrigan/toy-movie-2/master/lpt.png)
 
 The following shows speedup vs. number of parallel simulations
 
@@ -22,4 +22,6 @@ The following shows error over time with uncertainty. An adaptive simulation was
 to gather statistics
 
 ![stat](https://raw.github.com/mpharrigan/toy-movie-2/master/stat.png)
+
+The derivation of these plots is in the included IPython notebook, Toy-Movie-Stats-2.ipynb
 
