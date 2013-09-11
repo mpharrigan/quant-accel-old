@@ -23,11 +23,11 @@ def _error_vs_time(time, a, tau):
 def _time_vs_error(err, a, tau):
     return -tau * 1.e2 * np.log(err / a)
 
-def get_implied_timescales(t_matrix, lag_time, n_timescales):
-    """Get implied timescales at a particular lag time."""
-    implied_timescales = analysis.get_implied_timescales(t_matrix, n_timescales, lag_time)
-    print "Calculated implied timescale at lag time {}".format(lag_time)
-    return implied_timescales
+# def get_implied_timescales(t_matrix, lag_time, n_timescales):
+#     """Get implied timescales at a particular lag time."""
+#     implied_timescales = analysis.get_implied_timescales(t_matrix, n_timescales, lag_time)
+#     print "Calculated implied timescale at lag time {}".format(lag_time)
+#     return implied_timescales
 
 class ToySim(object):
     """Contains data for one toy simulation run."""
