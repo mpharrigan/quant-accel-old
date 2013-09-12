@@ -6,7 +6,7 @@ Created on Sep 5, 2013
 from fuzzy import classic, analysis, get_data
 from matplotlib import pyplot as pp
 from msmaccelerator.core import markovstatemodel
-from msmbuilder import clustering, MSMLib as msml
+from msmbuilder import clustering, MSMLib as msml, msm_analysis as msma
 from scipy import optimize
 import numpy as np
 import os
@@ -15,7 +15,7 @@ import re
 import sqlite3 as sql
 import sys
 
-
+EPS = 1.0e-8
 
 def _error_vs_time(time, a, tau):
     return a * np.exp(-time / (tau * 1.e2))
@@ -23,11 +23,35 @@ def _error_vs_time(time, a, tau):
 def _time_vs_error(err, a, tau):
     return -tau * 1.e2 * np.log(err / a)
 
-# def get_implied_timescales(t_matrix, lag_time, n_timescales):
-#     """Get implied timescales at a particular lag time."""
-#     implied_timescales = analysis.get_implied_timescales(t_matrix, n_timescales, lag_time)
-#     print "Calculated implied timescale at lag time {}".format(lag_time)
-#     return implied_timescales
+def kl_equilib_setup(gold_tmatrix):
+    """Save gold equilibrium population."""
+    gold_vals, gold_vecs = msma.get_eigenvectors(gold_tmatrix, n_eigs=1)
+    assert np.abs(gold_vals[0] - 1.0) < EPS, 'Gold eigenval is {}'.format(gold_vals[0])
+    return gold_vecs[0]
+
+
+def kl_equilib(gold_eq, comp_tmatrix):
+    """Return the KL divergence of comp_tmatrix from gold_tmatrix."""
+    comp_vals, comp_vecs = msma.get_eigenvectors(comp_tmatrix, n_eigs=1)
+    # Sanity check
+    if np.abs(comp_vals[0] - 1.0) > EPS:
+        print "Warning, comp eigenvalue is {}".format(comp_vals[0])
+    # Do KL
+    comp_eq = comp_vecs[0]
+    kl = np.sum(np.log(gold_eq / comp_eq) * gold_eq)
+    return kl
+
+def it_difference_setup(gold_tmatrix, n_timescales=3, lag_time=20):
+    """Save gold implied timescales."""
+    gold_its = analysis.get_implied_timescales(gold_tmatrix, n_timescales=n_timescales, lag_time=20)
+    return (gold_its, n_timescales, lag_time)
+
+def it_difference(params, comp_tmatrix):
+    """Return the distance between implied timescales."""
+    gold_its, n_timescales, lag_time = params
+    comp_its = analysis.get_implied_timescales(comp_tmatrix, n_timescales, lag_time)
+    diff = gold_its - comp_its
+    return np.sqrt(np.dot(diff, diff))
 
 class ToySim(object):
     """Contains data for one toy simulation run."""
@@ -37,10 +61,11 @@ class ToySim(object):
         self.clusterer = clusterer
 
         # Other Attributes
-        self.traj_list = list()
+        self.traj_list = None
         self.good_lag_time = None
-        self.t_matrices = list()
+        self.t_matrices = None
         self.load_stride = 1
+        self.errors = None
 
 
 
@@ -74,49 +99,15 @@ class ToySim(object):
         rev_counts, t_matrix, populations, mapping = msml.build_msm(counts)
         return t_matrix
 
+    def calculate_errors(self, setup, errorfunc):
+        errors = np.zeros((len(self.t_matrices), 2))
 
+        for i, (wall_time, t_matrix) in enumerate(self.t_matrices):
+            errors[i, 0] = wall_time
+            errors[i, 1] = errorfunc(setup, t_matrix)
 
-#     def get_error_vs_time(self, start_percent=5, n_points=10, load_stride=1):
-#         percents = np.linspace(start_percent / 100., 1.0, n_points)
-#
-#         errors = np.zeros((len(percents), 2))
-#         for i in xrange(len(percents)):
-#             percent = percents[i]
-#             traj_list = self.load_trajs(load_stride=load_stride, load_up_to_this_percent=percent)
-#             clusterer = self.do_clustering(traj_list)
-#             its = self.get_implied_timescales(clusterer, lag_time=self.good_lag_time, n_timescales=self.n_timescales)
-#
-#             # Calculate error
-#             evec = np.log(its) - np.log(self.gold_its)
-#             errors[i][1] = np.sqrt(np.dot(evec, evec))
-#             errors[i][0] = self.wall_steps
-#
-#             print "Calculated error from using {}% of all data".format(percent * 100.)
-#
-#         self.errors = errors
+        self.errors = errors
 
-#     def get_implied_timescales_vs_lt(self, clusterer, range_tuple, n_timescales=4):
-#         """Get implied timescales vs lag time."""
-#         lt_range = range(*range_tuple)
-#         implied_timescales = np.zeros((len(lt_range), n_timescales))
-#
-#         for i in xrange(len(lt_range)):
-#             implied_timescales[i] = self.get_implied_timescales(clusterer, lag_time=lt_range[i], n_timescales=n_timescales)
-#             print "Calculated implied timescale at lag time {}".format(lt_range[i])
-#
-#         self.implied_timescales = implied_timescales
-#         self.lt_range = lt_range
-
-
-#     def plot_implied_timescales_vs_lt(self):
-#         for i in xrange(self.implied_timescales.shape[1]):
-#             pp.scatter(self.lt_range, self.implied_timescales[:, i])
-#         pp.yscale('log')
-
-#     def plot_errors(self):
-#         pp.plot(self.errors[:, 0], self.errors[:, 1], 'bo')
-#         pp.xlabel('Walltime')
-#         pp.ylabel('Error')
 
 
     def __getstate__(self):
@@ -299,7 +290,7 @@ class Compare(object):
         self.implied_timescales = implied_timescales
 
     def calculate_all_tmatrices(self, lag_time):
-
+        """Calculate all transition matrices."""
         # Gold
         self.gold.calculate_tmatrices(lag_time)
 
@@ -320,7 +311,31 @@ class Compare(object):
             ll.calculate_tmatrices(lag_time)
             self.ll_list.append(ll)
 
+    def calculate_errors(self, errorfunc_setup, errorfunc):
+        """Calculate errors for each object
 
+        :param errorfunc_setup: function with signature f(gold_tmatrix) used
+                                to return data that is repeated for all
+                                further calculations. Usually the standard
+                                to compare against.
+        :param errorfunc: function with signature f(setup_result, t_matrix)
+                          gives a single value to quantify the difference
+                          between the 'correct' result in setup_result
+                          and t_matrix.
+        """
+        _, gold_tmatrix = self.gold.t_matrices[-1]
+        setup = errorfunc_setup(gold_tmatrix)
+
+        # Gold
+        self.gold.calculate_errors(setup, errorfunc)
+
+        # LPT
+        for lpt in self.lpt_list:
+            lpt.calculate_errors(setup, errorfunc)
+
+        # Parallel
+        for ll in self.ll_list:
+            ll.calculate_errors(setup, errorfunc)
 
 
     def get_lpt_dirs(self):
@@ -345,25 +360,6 @@ class Compare(object):
         ll_dirs = [os.path.join('quant/parallelism-run/', ll) for ll in ll_dirs]
 
         return ll_dirs
-
-#     def calculate_repeat(self):
-#         stat_dirs = os.listdir('quant/stat-run')
-#         stat_dirs = [ss for ss in stat_dirs if ss.startswith('stat-')]
-#
-#         stat_list = list()
-#         for i in xrange(len(stat_dirs)):
-#             try:
-#                 ss = LPT(os.path.join('quant/stat-run', stat_dirs[i]), self.n_timescales)
-#                 ss.good_lag_time = self.good_lag_time
-#                 ss.gold_its = self.gold.gold_its
-#                 ss.get_trajs_fns()
-#                 ss.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
-#                 ss.cleanup()
-#                 stat_list.append(ss)
-#             except:
-#                 print "+++ Errored in stat+++", stat_dirs[i]
-#                 pass
-#         self.stat_list = stat_list
 
 
 def lpt_dir_to_x(fn):
@@ -447,7 +443,9 @@ def main(options):
     if '3' in options:
         c.calculate_all_tmatrices(lag_time=20)
     if '4' in options:
-        # TODO: Implement
+        errorfunc_setup = kl_equilib_setup
+        errorfunc = kl_equilib
+        c.calculate_errors(errorfunc_setup, errorfunc)
         pass
 
     with open('results.pickl', 'wb') as f:
