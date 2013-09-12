@@ -446,7 +446,6 @@ def main(options):
         errorfunc_setup = kl_equilib_setup
         errorfunc = kl_equilib
         c.calculate_errors(errorfunc_setup, errorfunc)
-        pass
 
     with open('results.pickl', 'wb') as f:
         pickle.dump(c, f, protocol=2)
