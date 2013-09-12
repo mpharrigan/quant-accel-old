@@ -7,7 +7,7 @@ from fuzzy import classic, analysis, get_data
 from matplotlib import pyplot as pp
 from msmaccelerator.core import markovstatemodel
 from msmbuilder import clustering, MSMLib as msml, msm_analysis as msma
-from scipy import optimize
+from scipy import stats
 import numpy as np
 import os
 import pickle
@@ -15,20 +15,20 @@ import re
 import sqlite3 as sql
 import sys
 
+
 EPS = 1.0e-8
 
 def _error_vs_time(time, a, tau):
-    return a * np.exp(-time / (tau * 1.e2))
+    return a * np.exp(-time / (tau))
 
 def _time_vs_error(err, a, tau):
-    return -tau * 1.e2 * np.log(err / a)
+    return -tau * np.log(err / a)
 
 def kl_equilib_setup(gold_tmatrix):
     """Save gold equilibrium population."""
     gold_vals, gold_vecs = msma.get_eigenvectors(gold_tmatrix, n_eigs=1)
     assert np.abs(gold_vals[0] - 1.0) < EPS, 'Gold eigenval is {}'.format(gold_vals[0])
     return gold_vecs[0]
-
 
 def kl_equilib(gold_eq, comp_tmatrix):
     """Return the KL divergence of comp_tmatrix from gold_tmatrix."""
@@ -66,8 +66,8 @@ class ToySim(object):
         self.t_matrices = None
         self.load_stride = 1
         self.errors = None
-
-
+        self.popt = None
+        self.speedup = None
 
     def build_msm(self, lag_time=None):
         """Build an MSM from the loaded trajectories."""
@@ -100,6 +100,11 @@ class ToySim(object):
         return t_matrix
 
     def calculate_errors(self, setup, errorfunc):
+        """Calculate the errors for each transition matrix in this model.
+
+        Use the provided function to do the computation, and the result
+        to compare against should be in ``setup``.
+        """
         errors = np.zeros((len(self.t_matrices), 2))
 
         for i, (wall_time, t_matrix) in enumerate(self.t_matrices):
@@ -108,9 +113,49 @@ class ToySim(object):
 
         self.errors = errors
 
+    def fit_errors(self):
+        r"""Fit the log of the errors.
 
+        .. math::
+            \varepsilon = A \e^{-\frac{t}{\tau}}
+
+            \ln (\varepsilon) = \ln A - \frac{t}{\tau}
+
+        """
+        assert self.errors is not None
+
+        slope, intercept, r_value, p_value, std_err = stats.linregress(self.errors[:, 0], np.log(self.errors[:, 1]))
+
+        a = np.exp(intercept)
+        tau = -1.0 / slope
+
+        self.popt = (a, tau)
+
+    def calculate_speedup(self, gold):
+        """Calculate the speedup compared to the standard.
+
+        This function fits a curve to the errors over time
+        and returns speedup at a given error tolerance.
+
+        :param gold_popt: The parameters of the simulation to compare against.
+        :param error_cutoff: The error cutoff at which to calculate the
+                             speedup. #TODO: Check to see if now that
+                             using the same starting conditions, the intial
+                             error is the same, so we can simply use the
+                             ratio of exponential decay things.
+        """
+        if gold.popt is None:
+            gold.fit_errors()
+        if self.popt is None:
+            self.fit_errors()
+
+        gold_a, gold_tau = gold.popt
+        comp_a, comp_tau = self.popt
+
+        self.speedup = gold_tau / comp_tau
 
     def __getstate__(self):
+        """Run when pickling."""
         state = dict(self.__dict__)
         try:
             del state['traj_list']
@@ -375,57 +420,46 @@ def ll_dir_to_x(fn):
     return np.log(x)
 
 
-def get_speedup2(toy, popt_gold, p0=None, error_val=0.4):
-    # Optimize
-    popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
-    speedup = _time_vs_error(error_val, *popt_gold) / _time_vs_error(error_val, *popt_toy)
-    return speedup
-
-def plot_and_fit(toy, p0=None):
-    ax = pp.gca()
-    popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
-    xs = np.linspace(1, toy.errors[-1, 0])
-    ys = _error_vs_time(xs, *popt_toy)
-    ax.plot(toy.errors[:, 0], toy.errors[:, 1], 'o', label=toy.get_name())
-    ax.plot(xs, ys, color=ax.lines[-1].get_color())
-    print popt_toy
-    return popt_toy
-
-def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.4, p0=None, error_val=0.4):
-    speedups = list()
-    xvals = list()
-    xlabels = list()
-    for toy in toys:
-        speedups.append(get_speedup2(toy, popt_gold, p0, error_val))
-
-        if directory_to_x_func is not None:
-            xvals.append(directory_to_x_func(toy.directory))
-            xlabels.append(toy.directory)
-
-    if directory_to_x_func is None:
-        xvals = np.linspace(0, 10.0, len(toys))
-
-    pp.bar(xvals, speedups, bottom=0, width=width, log=True)
-    pp.xticks(np.array(xvals) + width / 2, np.exp(xvals))
-    xmin, xmax = pp.xlim()
-    pp.hlines(1.0, xmin, xmax)  # Break even
-    pp.xlim(xmin, xmax)
-    pp.ylabel("Speedup")
-    pp.xlabel(xlabel)
-    print xlabels
-    print speedups
-
-
-# def main():
-#     c = Compare(lag_time=60, n_timescales=3)
-#     output_fn = "quant_results.lt{}.it{}.pickl".format(c.good_lag_time, c.n_timescales)
-#     c.calculate_gold()
-#     c.calculate_lpt()
-#     c.calculate_ll()
-#     c.calculate_repeat()
+# def get_speedup2(toy, popt_gold, p0=None, error_val=0.4):
+#     # Optimize
+#     popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
+#     speedup = _time_vs_error(error_val, *popt_gold) / _time_vs_error(error_val, *popt_toy)
+#     return speedup
 #
-#     with open(output_fn, 'w') as f:
-#         pickle.dump(c, f)
+# def plot_and_fit(toy, p0=None):
+#     ax = pp.gca()
+#     popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
+#     xs = np.linspace(1, toy.errors[-1, 0])
+#     ys = _error_vs_time(xs, *popt_toy)
+#     ax.plot(toy.errors[:, 0], toy.errors[:, 1], 'o', label=toy.get_name())
+#     ax.plot(xs, ys, color=ax.lines[-1].get_color())
+#     print popt_toy
+#     return popt_toy
+
+# def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.4, p0=None, error_val=0.4):
+#     speedups = list()
+#     xvals = list()
+#     xlabels = list()
+#     for toy in toys:
+#         speedups.append(toy.speedup)
+#
+#         if directory_to_x_func is not None:
+#             xvals.append(directory_to_x_func(toy.directory))
+#             xlabels.append(toy.directory)
+#
+#     if directory_to_x_func is None:
+#         xvals = np.linspace(0, 10.0, len(toys))
+#
+#     pp.bar(xvals, speedups, bottom=0, width=width, log=True)
+#     pp.xticks(np.array(xvals) + width / 2, np.exp(xvals))
+#     xmin, xmax = pp.xlim()
+#     pp.hlines(1.0, xmin, xmax)  # Break even
+#     pp.xlim(xmin, xmax)
+#     pp.ylabel("Speedup")
+#     pp.xlabel(xlabel)
+#     print xlabels
+#     print speedups
+
 
 def main(options):
     if os.path.exists('results.pickl'):
@@ -461,7 +495,6 @@ def parse():
     """
     if len(sys.argv) > 1:
         main(sys.argv[1])
-
 
 
 if __name__ == "__main__":
