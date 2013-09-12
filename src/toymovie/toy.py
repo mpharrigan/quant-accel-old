@@ -382,6 +382,15 @@ class Compare(object):
         for ll in self.ll_list:
             ll.calculate_errors(setup, errorfunc)
 
+    def calculate_speedups(self):
+        """Calculate speedups."""
+        for lpt in self.lpt_list:
+            lpt.calculate_speedup(self.gold)
+
+        for ll in self.ll_list:
+            ll.calculate_speedup(self.gold)
+
+
 
     def get_lpt_dirs(self):
         lpt_dirs = [
@@ -480,6 +489,8 @@ def main(options):
         errorfunc_setup = kl_equilib_setup
         errorfunc = kl_equilib
         c.calculate_errors(errorfunc_setup, errorfunc)
+    if '5' in options:
+        c.calculate_speedups()
 
     with open('results.pickl', 'wb') as f:
         pickle.dump(c, f, protocol=2)
@@ -492,6 +503,7 @@ def parse():
          2 - Calculate ITs
          3 - Calculate transition matrices (x3)
          4 - Apply func to transition matricies to get error
+         5 - Calculate speedups
     """
     if len(sys.argv) > 1:
         main(sys.argv[1])
