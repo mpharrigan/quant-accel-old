@@ -122,7 +122,7 @@ class ToySim(object):
     def __getstate__(self):
         state = dict(self.__dict__)
         try:
-            pass
+            del state['traj_list']
         except KeyError:
             pass
         return state
@@ -262,14 +262,6 @@ class LPT(ToySim):
         fn = fn[fn.rfind('/') + 1:]
         return fn
 
-    # Don't pickle unneccesary things
-    def __getstate__(self):
-        state = super(LPT, self).__getstate__()
-        try:
-            pass
-        except KeyError:
-            pass
-        return state
 
 
 class Compare(object):
@@ -302,6 +294,7 @@ class Compare(object):
             t_matrix = self.gold.build_msm(lag_time)
             it = analysis.get_implied_timescales(t_matrix, n_timescales, lag_time)
             implied_timescales.append((lag_time, it))
+            print "Calculated lag time at time {}".format(lag_time)
 
         self.implied_timescales = implied_timescales
 
@@ -352,25 +345,6 @@ class Compare(object):
         ll_dirs = [os.path.join('quant/parallelism-run/', ll) for ll in ll_dirs]
 
         return ll_dirs
-
-#     def calculate_repeat(self):
-#         stat_dirs = os.listdir('quant/stat-run')
-#         stat_dirs = [ss for ss in stat_dirs if ss.startswith('stat-')]
-#
-#         stat_list = list()
-#         for i in xrange(len(stat_dirs)):
-#             try:
-#                 ss = LPT(os.path.join('quant/stat-run', stat_dirs[i]), self.n_timescales)
-#                 ss.good_lag_time = self.good_lag_time
-#                 ss.gold_its = self.gold.gold_its
-#                 ss.get_trajs_fns()
-#                 ss.get_error_vs_time(start_percent=0.0, n_points=10, load_stride=1)
-#                 ss.cleanup()
-#                 stat_list.append(ss)
-#             except:
-#                 print "+++ Errored in stat+++", stat_dirs[i]
-#                 pass
-#         self.stat_list = stat_list
 
 
 def lpt_dir_to_x(fn):
@@ -440,23 +414,25 @@ def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.
 
 def main(options):
     if os.path.exists('results.pickl'):
-        with open('results.pickl', 'r') as f:
+        with open('results.pickl', 'rb') as f:
             c = pickle.load(f)
     else:
         c = Compare()
+
+    print "You specified options {}".format(options)
 
     if '1' in options:
         c.do_clustering(distance_cutoff=0.25, n_medoid_iters=10)
     if '2' in options:
         c.calculate_implied_timescales(lag_times=xrange(1, 100, 5), n_timescales=3)
     if '3' in options:
-        c.calculate_all_tmatrices(lag_time=60)
+        c.calculate_all_tmatrices(lag_time=20)
     if '4' in options:
         # TODO: Implement
         pass
 
-    with open('results.pickl', 'w') as f:
-        pickle.dump(c, f)
+    with open('results.pickl', 'wb') as f:
+        pickle.dump(c, f, protocol=2)
 
 def parse():
     print """Quantitative analysis for adaptive sampling on the muller potential.
