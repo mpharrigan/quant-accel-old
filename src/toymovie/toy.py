@@ -19,8 +19,8 @@ import sys
 # Constants (filenames)
 GOLD_TMAT = 'results-gold.pickl'
 RESULTS = 'results.pickl'
-LPT_FORMAT = 'results-lpt-%s'
-LL_FORMAT = 'results-ll-%s'
+LPT_FORMAT = 'results-lpt-%s.pickl'
+LL_FORMAT = 'results-ll-%s.pickl'
 
 def _error_vs_time(time, a, tau):
     return a * np.exp(-time / (tau * 1.e2))
