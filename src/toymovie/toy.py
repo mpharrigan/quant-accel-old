@@ -76,7 +76,7 @@ class ToySim(object):
                 assignments[i, j] = np.argmin(d)
 
         counts = msml.get_count_matrix_from_assignments(assignments, n_states=None, lag_time=lag_time)
-        rev_counts, t_matrix, populations, mapping = msml.build_msm(counts)
+        rev_counts, t_matrix, populations, mapping = msml.build_msm(counts, ergodic_trimming=False)
         return t_matrix
 
     def __getstate__(self):
