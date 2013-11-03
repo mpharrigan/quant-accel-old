@@ -46,6 +46,8 @@ class ToySim(object):
         self.traj_list = list()
         self.good_lag_time = None
         self.load_stride = 1
+        
+        self.t_matrices = None
 
 
 
@@ -139,7 +141,7 @@ class Gold(ToySim):
             except:
                 print "Couldn't build msm {} using {:.2f}% of data".format(self.get_name(), 100.*percent)
 
-        return t_matrices
+        self.t_matrices = t_matrices
 
     def get_name(self):
         """Display name."""
@@ -235,7 +237,7 @@ class LPT(ToySim):
             except:
                 print "Couldn't build msm {} after round {}".format(self.get_name(), round_i + 1)
 
-        return t_matrices
+        self.t_matrices = t_matrices
 
     def get_name(self):
         """Get a display name. We take this from the directory name."""
@@ -287,14 +289,7 @@ class Compare(object):
         """Calculate all the transition matrices and save them to files."""
 
         # Gold
-        gold_tmatrices = self.gold.calculate_tmatrices(lag_time)
-
-        # Save
-        with open(GOLD_TMAT, 'w') as f:
-            pickle.dump(gold_tmatrices, f)
-
-        # Delete
-        del gold_tmatrices
+        self.gold.calculate_tmatrices(lag_time)
 
 
         # Do length per traj
@@ -302,11 +297,7 @@ class Compare(object):
         for lpt_dir in lpt_dirs:
             # Load and calculate
             lpt = LPT(lpt_dir, self.gold.clusterer)
-            t_matrices = lpt.calculate_tmatrices(lag_time)
-
-            # Save
-            with open(LPT_FORMAT % lpt.get_name(), 'w') as f:
-                pickle.dump(t_matrices, f)
+            lpt.calculate_tmatrices(lag_time)
 
 
         # Do parallel
@@ -314,11 +305,7 @@ class Compare(object):
         for ll_dir in ll_dirs:
             # Load and calculate
             ll = LPT(ll_dir, self.gold.clusterer)
-            t_matrices = ll.calculate_tmatrices(lag_time)
-
-            # Save
-            with open(LL_FORMAT % ll.get_name(), 'w') as f:
-                pickle.dump(t_matrices, f)
+            ll.calculate_tmatrices(lag_time)
 
 
     def get_lpt_dirs(self):
