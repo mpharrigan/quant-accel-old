@@ -438,8 +438,7 @@ def main(options):
     if '3' in options:
         c.calculate_all_tmatrices(lag_time=20)
     if '4' in options:
-        # TODO: Implement analysis
-        pass
+        c.calculate_all_errors(n_eigens=2)
 
     with open('results.pickl', 'wb') as f:
         pickle.dump(c, f, protocol=2)
