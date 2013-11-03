@@ -16,6 +16,11 @@ import sqlite3 as sql
 import sys
 
 
+# Constants (filenames)
+GOLD_TMAT = 'results-gold.pickl'
+RESULTS = 'results.pickl'
+LPT_FORMAT = 'results-lpt-%s'
+LL_FORMAT = 'results-ll-%s'
 
 def _error_vs_time(time, a, tau):
     return a * np.exp(-time / (tau * 1.e2))
@@ -33,13 +38,13 @@ class ToySim(object):
     """Contains data for one toy simulation run."""
 
     def __init__(self, directory, clusterer):
+        """Initialize with direcory and clusterer."""
         self.directory = directory
         self.clusterer = clusterer
 
         # Other Attributes
         self.traj_list = list()
         self.good_lag_time = None
-        self.t_matrices = list()
         self.load_stride = 1
 
 
@@ -74,52 +79,8 @@ class ToySim(object):
         rev_counts, t_matrix, populations, mapping = msml.build_msm(counts)
         return t_matrix
 
-
-
-#     def get_error_vs_time(self, start_percent=5, n_points=10, load_stride=1):
-#         percents = np.linspace(start_percent / 100., 1.0, n_points)
-#
-#         errors = np.zeros((len(percents), 2))
-#         for i in xrange(len(percents)):
-#             percent = percents[i]
-#             traj_list = self.load_trajs(load_stride=load_stride, load_up_to_this_percent=percent)
-#             clusterer = self.do_clustering(traj_list)
-#             its = self.get_implied_timescales(clusterer, lag_time=self.good_lag_time, n_timescales=self.n_timescales)
-#
-#             # Calculate error
-#             evec = np.log(its) - np.log(self.gold_its)
-#             errors[i][1] = np.sqrt(np.dot(evec, evec))
-#             errors[i][0] = self.wall_steps
-#
-#             print "Calculated error from using {}% of all data".format(percent * 100.)
-#
-#         self.errors = errors
-
-#     def get_implied_timescales_vs_lt(self, clusterer, range_tuple, n_timescales=4):
-#         """Get implied timescales vs lag time."""
-#         lt_range = range(*range_tuple)
-#         implied_timescales = np.zeros((len(lt_range), n_timescales))
-#
-#         for i in xrange(len(lt_range)):
-#             implied_timescales[i] = self.get_implied_timescales(clusterer, lag_time=lt_range[i], n_timescales=n_timescales)
-#             print "Calculated implied timescale at lag time {}".format(lt_range[i])
-#
-#         self.implied_timescales = implied_timescales
-#         self.lt_range = lt_range
-
-
-#     def plot_implied_timescales_vs_lt(self):
-#         for i in xrange(self.implied_timescales.shape[1]):
-#             pp.scatter(self.lt_range, self.implied_timescales[:, i])
-#         pp.yscale('log')
-
-#     def plot_errors(self):
-#         pp.plot(self.errors[:, 0], self.errors[:, 1], 'bo')
-#         pp.xlabel('Walltime')
-#         pp.ylabel('Error')
-
-
     def __getstate__(self):
+        """Delete irrelevant variables from pickling."""
         state = dict(self.__dict__)
         try:
             del state['traj_list']
@@ -129,8 +90,13 @@ class ToySim(object):
 
 
 class Gold(ToySim):
+    """Simulation that you can load partial data. Also store the clusterer."""
 
     def load_trajs(self, load_stride, load_up_to_this_percent=1.0, verbose=True):
+        """Load trajectories by percentage.
+
+        Returns number of wall steps.
+        """
         self.load_stride = load_stride
         assert load_up_to_this_percent <= 1.0, 'Must load less than 100%'
 
@@ -150,6 +116,11 @@ class Gold(ToySim):
         return wall_steps
 
     def calculate_tmatrices(self, n_points=15, lag_time=None):
+        """Calculate transition matrices at n_points percentages of data.
+
+        Returns transition matrices for saving so that we don't blow up
+        memory.
+        """
         if lag_time is None:
             lag_time = self.good_lag_time
         else:
@@ -168,20 +139,22 @@ class Gold(ToySim):
             except:
                 print "Couldn't build msm {} using {:.2f}% of data".format(self.get_name(), 100.*percent)
 
-        self.t_matrices = t_matrices
+        return t_matrices
 
     def get_name(self):
+        """Display name."""
         return "Gold"
 
 
 
 class LPT(ToySim):
+    """LPT or ll simulations."""
 
     def __init__(self, directory, clusterer):
+        """Initialize and generate filenames."""
         super(LPT, self).__init__(directory, clusterer)
 
         self.rounds = None
-
         self._get_trajs_fns()
 
     def _get_trajs_fns(self, db_fn='db.sqlite'):
@@ -216,6 +189,10 @@ class LPT(ToySim):
 
 
     def load_trajs(self, load_stride, round_i, verbose=True):
+        """Load trajectories up to round_i.
+
+        Returns number of wall steps.
+        """
         self.load_stride = load_stride
 
         assert self.rounds is not None, 'Please load rounds first'
@@ -238,6 +215,10 @@ class LPT(ToySim):
         return wall_steps
 
     def calculate_tmatrices(self, lag_time=None):
+        """Build transition matrices for each round.
+
+        Returns a list for pickling to save memory.
+        """
         if lag_time is None:
             lag_time = self.good_lag_time
         else:
@@ -254,7 +235,7 @@ class LPT(ToySim):
             except:
                 print "Couldn't build msm {} after round {}".format(self.get_name(), round_i + 1)
 
-        self.t_matrices = t_matrices
+        return t_matrices
 
     def get_name(self):
         """Get a display name. We take this from the directory name."""
@@ -265,15 +246,16 @@ class LPT(ToySim):
 
 
 class Compare(object):
+    """Class for managing all the simulations."""
 
     def __init__(self):
+        """Initialize."""
         self.gold = None
-        self.ll_list = None
-        self.lpt_list = None
         self.n_clusters = None
         self.implied_timescales = None
 
     def do_clustering(self, distance_cutoff, n_medoid_iters):
+        """Perform clustering on the gold run and save the clusterer."""
         gold = Gold('quant/gold-run/gold', clusterer=None)
         gold.load_trajs(1, 1.0)
         trajs = get_data.get_shimtraj_from_trajlist(gold.traj_list)
@@ -289,6 +271,9 @@ class Compare(object):
 
 
     def calculate_implied_timescales(self, lag_times, n_timescales):
+        """Calculate implied timescales of the gold run at range specified
+        by lag_times.
+        """
         implied_timescales = list()
         for lag_time in lag_times:
             t_matrix = self.gold.build_msm(lag_time)
@@ -299,28 +284,41 @@ class Compare(object):
         self.implied_timescales = implied_timescales
 
     def calculate_all_tmatrices(self, lag_time):
+        """Calculate all the transition matrices and save them to files."""
 
         # Gold
-        self.gold.calculate_tmatrices(lag_time)
+        gold_tmatrices = self.gold.calculate_tmatrices(lag_time)
 
-        self.ll_list = list()
-        self.lpt_list = list()
+        # Save
+        with open(GOLD_TMAT, 'w') as f:
+            pickle.dump(gold_tmatrices, f)
+
+        # Delete
+        del gold_tmatrices
+
 
         # Do length per traj
         lpt_dirs = self.get_lpt_dirs()
         for lpt_dir in lpt_dirs:
+            # Load and calculate
             lpt = LPT(lpt_dir, self.gold.clusterer)
-            lpt.calculate_tmatrices(lag_time)
-            self.lpt_list.append(lpt)
+            t_matrices = lpt.calculate_tmatrices(lag_time)
+
+            # Save
+            with open(LPT_FORMAT % lpt.get_name(), 'w') as f:
+                pickle.dump(t_matrices, f)
+
 
         # Do parallel
         ll_dirs = self.get_ll_dirs()
         for ll_dir in ll_dirs:
+            # Load and calculate
             ll = LPT(ll_dir, self.gold.clusterer)
-            ll.calculate_tmatrices(lag_time)
-            self.ll_list.append(ll)
+            t_matrices = ll.calculate_tmatrices(lag_time)
 
-
+            # Save
+            with open(LL_FORMAT % ll.get_name(), 'w') as f:
+                pickle.dump(t_matrices, f)
 
 
     def get_lpt_dirs(self):
@@ -401,17 +399,6 @@ def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.
     print speedups
 
 
-# def main():
-#     c = Compare(lag_time=60, n_timescales=3)
-#     output_fn = "quant_results.lt{}.it{}.pickl".format(c.good_lag_time, c.n_timescales)
-#     c.calculate_gold()
-#     c.calculate_lpt()
-#     c.calculate_ll()
-#     c.calculate_repeat()
-#
-#     with open(output_fn, 'w') as f:
-#         pickle.dump(c, f)
-
 def main(options):
     if os.path.exists('results.pickl'):
         with open('results.pickl', 'rb') as f:
@@ -428,7 +415,7 @@ def main(options):
     if '3' in options:
         c.calculate_all_tmatrices(lag_time=20)
     if '4' in options:
-        # TODO: Implement
+        # TODO: Implement analysis
         pass
 
     with open('results.pickl', 'wb') as f:
@@ -445,7 +432,6 @@ def parse():
     """
     if len(sys.argv) > 1:
         main(sys.argv[1])
-
 
 
 if __name__ == "__main__":
