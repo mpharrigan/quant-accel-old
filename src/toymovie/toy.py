@@ -22,12 +22,6 @@ RESULTS = 'results.pickl'
 LPT_FORMAT = 'results-lpt-%s.pickl'
 LL_FORMAT = 'results-ll-%s.pickl'
 
-def _error_vs_time(time, a, tau):
-    return a * np.exp(-time / (tau * 1.e2))
-
-def _time_vs_error(err, a, tau):
-    return -tau * 1.e2 * np.log(err / a)
-
 def get_implied_timescales(t_matrix, lag_time, n_timescales):
     """Get implied timescales at a particular lag time."""
     implied_timescales = analysis.get_implied_timescales(t_matrix, n_timescales, lag_time)
@@ -345,45 +339,45 @@ def ll_dir_to_x(fn):
     return np.log(x)
 
 
-def get_speedup2(toy, popt_gold, p0=None, error_val=0.4):
-    # Optimize
-    popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
-    speedup = _time_vs_error(error_val, *popt_gold) / _time_vs_error(error_val, *popt_toy)
-    return speedup
+# def get_speedup2(toy, popt_gold, p0=None, error_val=0.4):
+#     # Optimize
+#     popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
+#     speedup = _time_vs_error(error_val, *popt_gold) / _time_vs_error(error_val, *popt_toy)
+#     return speedup
+# 
+# def plot_and_fit(toy, p0=None):
+#     ax = pp.gca()
+#     popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
+#     xs = np.linspace(1, toy.errors[-1, 0])
+#     ys = _error_vs_time(xs, *popt_toy)
+#     ax.plot(toy.errors[:, 0], toy.errors[:, 1], 'o', label=toy.get_name())
+#     ax.plot(xs, ys, color=ax.lines[-1].get_color())
+#     print popt_toy
+#     return popt_toy
 
-def plot_and_fit(toy, p0=None):
-    ax = pp.gca()
-    popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
-    xs = np.linspace(1, toy.errors[-1, 0])
-    ys = _error_vs_time(xs, *popt_toy)
-    ax.plot(toy.errors[:, 0], toy.errors[:, 1], 'o', label=toy.get_name())
-    ax.plot(xs, ys, color=ax.lines[-1].get_color())
-    print popt_toy
-    return popt_toy
-
-def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.4, p0=None, error_val=0.4):
-    speedups = list()
-    xvals = list()
-    xlabels = list()
-    for toy in toys:
-        speedups.append(get_speedup2(toy, popt_gold, p0, error_val))
-
-        if directory_to_x_func is not None:
-            xvals.append(directory_to_x_func(toy.directory))
-            xlabels.append(toy.directory)
-
-    if directory_to_x_func is None:
-        xvals = np.linspace(0, 10.0, len(toys))
-
-    pp.bar(xvals, speedups, bottom=0, width=width, log=True)
-    pp.xticks(np.array(xvals) + width / 2, np.exp(xvals))
-    xmin, xmax = pp.xlim()
-    pp.hlines(1.0, xmin, xmax)  # Break even
-    pp.xlim(xmin, xmax)
-    pp.ylabel("Speedup")
-    pp.xlabel(xlabel)
-    print xlabels
-    print speedups
+# def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.4, p0=None, error_val=0.4):
+#     speedups = list()
+#     xvals = list()
+#     xlabels = list()
+#     for toy in toys:
+#         speedups.append(get_speedup2(toy, popt_gold, p0, error_val))
+# 
+#         if directory_to_x_func is not None:
+#             xvals.append(directory_to_x_func(toy.directory))
+#             xlabels.append(toy.directory)
+# 
+#     if directory_to_x_func is None:
+#         xvals = np.linspace(0, 10.0, len(toys))
+# 
+#     pp.bar(xvals, speedups, bottom=0, width=width, log=True)
+#     pp.xticks(np.array(xvals) + width / 2, np.exp(xvals))
+#     xmin, xmax = pp.xlim()
+#     pp.hlines(1.0, xmin, xmax)  # Break even
+#     pp.xlim(xmin, xmax)
+#     pp.ylabel("Speedup")
+#     pp.xlabel(xlabel)
+#     print xlabels
+#     print speedups
 
 
 def main(options):
