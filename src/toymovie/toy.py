@@ -6,7 +6,7 @@ Created on Sep 5, 2013
 from fuzzy import classic, analysis, get_data
 from matplotlib import pyplot as pp
 from msmaccelerator.core import markovstatemodel
-from msmbuilder import clustering, MSMLib as msml
+from msmbuilder import clustering, MSMLib as msml, msm_analysis as msma
 from scipy import optimize
 import numpy as np
 import os
@@ -42,6 +42,7 @@ class ToySim(object):
         self.load_stride = 1
         
         self.t_matrices = None
+        self.errors = None
 
 
 
@@ -74,6 +75,27 @@ class ToySim(object):
         counts = msml.get_count_matrix_from_assignments(assignments, n_states=None, lag_time=lag_time)
         rev_counts, t_matrix, populations, mapping = msml.build_msm(counts, ergodic_trimming=False)
         return t_matrix
+    
+    def calculate_errors(self, n_eigen, gold_tmatrix):        
+        gvals, gvecs = msma.get_eigenvectors(gold_tmatrix, n_eigs=n_eigen)
+        errors = np.zeros((len(self.t_matrices), 2))
+        
+        for i, (wall_steps, t_matrix) in enumerate(self.t_matrices):
+            vals, vecs = msma.get_eigenvectors(t_matrix, n_eigs=n_eigen)
+            if gvecs.shape[0] != vecs.shape[0]:
+                print "Error: Vectors are not the same shape!"
+            
+            error = 0.0
+            for j in xrange(n_eigen):
+                diff = vecs[:, j] - gvecs[:, j]
+                error += np.dot(diff, diff)
+                
+            errors[i, 0] = wall_steps
+            errors[i, 1] = error
+        
+        self.errors = errors
+            
+            
 
     def __getstate__(self):
         """Delete irrelevant variables from pickling."""
@@ -249,6 +271,9 @@ class Compare(object):
         self.gold = None
         self.n_clusters = None
         self.implied_timescales = None
+        
+        self.ll_list = None
+        self.lpt_list = None
 
     def do_clustering(self, distance_cutoff, n_medoid_iters):
         """Perform clustering on the gold run and save the clusterer."""
@@ -280,26 +305,43 @@ class Compare(object):
         self.implied_timescales = implied_timescales
 
     def calculate_all_tmatrices(self, lag_time):
-        """Calculate all the transition matrices and save them to files."""
+        """Calculate all the transition matrices."""
 
         # Gold
         self.gold.calculate_tmatrices(lag_time)
 
-
         # Do length per traj
+        lpt_list = list()
         lpt_dirs = self.get_lpt_dirs()
         for lpt_dir in lpt_dirs:
             # Load and calculate
             lpt = LPT(lpt_dir, self.gold.clusterer)
             lpt.calculate_tmatrices(lag_time)
-
+            lpt_list.append(lpt)
 
         # Do parallel
         ll_dirs = self.get_ll_dirs()
+        ll_list = list()
         for ll_dir in ll_dirs:
             # Load and calculate
             ll = LPT(ll_dir, self.gold.clusterer)
             ll.calculate_tmatrices(lag_time)
+            ll_list.append(ll)
+            
+        self.lpt_list = lpt_list
+        self.ll_list = ll_list
+            
+    def calculate_all_errors(self, n_eigens):
+        """Calculate errors in each toy simulation."""
+        
+        _, gold_tmatrix = self.gold.t_matrices[-1]
+        self.gold.calculate_errors(n_eigens, gold_tmatrix)
+        
+        for toysim in self.ll_list:
+            toysim.calculate_errors(n_eigens, gold_tmatrix)
+            
+        for toysim in self.lpt_list:
+            toysim.calculate_errors(n_eigens, gold_tmatrix)
 
 
     def get_lpt_dirs(self):
