@@ -16,11 +16,6 @@ import sqlite3 as sql
 import sys
 
 
-# Constants (filenames)
-GOLD_TMAT = 'results-gold.pickl'
-RESULTS = 'results.pickl'
-LPT_FORMAT = 'results-lpt-%s.pickl'
-LL_FORMAT = 'results-ll-%s.pickl'
 
 def get_implied_timescales(t_matrix, lag_time, n_timescales):
     """Get implied timescales at a particular lag time."""
@@ -39,11 +34,9 @@ class ToySim(object):
         # Other Attributes
         self.traj_list = list()
         self.good_lag_time = None
-        self.load_stride = 1
         
         self.t_matrices = None
         self.errors = None
-
 
 
     def build_msm(self, lag_time=None):
@@ -94,8 +87,6 @@ class ToySim(object):
             errors[i, 1] = error
         
         self.errors = errors
-            
-            
 
     def __getstate__(self):
         """Delete irrelevant variables from pickling."""
@@ -105,23 +96,21 @@ class ToySim(object):
         except KeyError:
             pass
         return state
-
-
-class Gold(ToySim):
-    """Simulation that you can load partial data. Also store the clusterer."""
-
-    def load_trajs(self, load_stride, load_up_to_this_percent=1.0, verbose=True):
+    
+class OneLongT(ToySim):
+    
+    def load_trajs(self, load_up_to_this_percent=1.0, verbose=True):
         """Load trajectories by percentage.
 
         Returns number of wall steps.
         """
-        self.load_stride = load_stride
+        
         assert load_up_to_this_percent <= 1.0, 'Must load less than 100%'
 
         traj_list = get_data.get_trajs(directory=os.path.join(self.directory, 'trajs/'), dim=2)
         load_end = int(load_up_to_this_percent * traj_list[0].shape[0])
         print "Ending at index {:,}".format(load_end)
-        traj_list = [traj[:load_end:load_stride, ...] for traj in traj_list]
+        traj_list = [traj[:load_end] for traj in traj_list]
 
         # Stats
         if verbose:
@@ -132,12 +121,10 @@ class Gold(ToySim):
         wall_steps = load_end
         self.traj_list = traj_list
         return wall_steps
-
+    
+    
     def calculate_tmatrices(self, n_points=15, lag_time=None):
         """Calculate transition matrices at n_points percentages of data.
-
-        Returns transition matrices for saving so that we don't blow up
-        memory.
         """
         if lag_time is None:
             lag_time = self.good_lag_time
@@ -159,10 +146,28 @@ class Gold(ToySim):
 
         self.t_matrices = t_matrices
 
-    def get_name(self):
-        """Display name."""
-        return "Gold"
 
+class Gold(ToySim):
+    """Simulation that you can load partial data. Also store the clusterer."""
+
+    def load_trajs(self):
+        """Load trajectories by percentage."""
+
+        traj_list = get_data.get_trajs(directory=os.path.join(self.directory, 'trajs/'), dim=2)
+        self.traj_list = traj_list
+
+    def calculate_tmatrices(self, n_points=15, lag_time=None):
+        """Calculate a transition matrix at the end point."""
+        
+        if lag_time is None:
+            lag_time = self.good_lag_time
+        else:
+            self.good_lag_time = lag_time
+
+        self.load_trajs()
+        t_matrix = self.build_msm(lag_time)
+        t_matrices = [(0, t_matrix)]
+        self.t_matrices = t_matrices
 
 
 class LPT(ToySim):
@@ -255,12 +260,6 @@ class LPT(ToySim):
 
         self.t_matrices = t_matrices
 
-    def get_name(self):
-        """Get a display name. We take this from the directory name."""
-        fn = self.directory
-        fn = fn[fn.rfind('/') + 1:]
-        return fn
-
 
 
 class Compare(object):
@@ -272,13 +271,17 @@ class Compare(object):
         self.n_clusters = None
         self.implied_timescales = None
         
+        self.olt = None
         self.ll_list = None
         self.lpt_list = None
 
     def do_clustering(self, distance_cutoff, n_medoid_iters):
-        """Perform clustering on the gold run and save the clusterer."""
+        """Perform clustering on the gold run and save the clusterer.
+        
+        Returns the clusterer.
+        """
         gold = Gold('quant/gold-run/gold', clusterer=None)
-        gold.load_trajs(1, 1.0)
+        gold.load_trajs()
         trajs = get_data.get_shimtraj_from_trajlist(gold.traj_list)
         metric = classic.Euclidean2d()
 
@@ -289,12 +292,13 @@ class Compare(object):
         print "Clustered data into {:,} clusters".format(self.n_clusters)
         gold.clusterer = hkm
         self.gold = gold
-
+        return hkm
 
     def calculate_implied_timescales(self, lag_times, n_timescales):
         """Calculate implied timescales of the gold run at range specified
         by lag_times.
         """
+        
         implied_timescales = list()
         for lag_time in lag_times:
             t_matrix = self.gold.build_msm(lag_time)
@@ -303,12 +307,19 @@ class Compare(object):
             print "Calculated lag time at time {}".format(lag_time)
 
         self.implied_timescales = implied_timescales
+        return implied_timescales
 
     def calculate_all_tmatrices(self, lag_time):
         """Calculate all the transition matrices."""
 
         # Gold
         self.gold.calculate_tmatrices(lag_time)
+        
+        # One long trajectory
+        # TODO: Make this different from gold
+        olt = OneLongT('quant/gold-run/gold', self.gold.clusterer)
+        olt.calculate_tmatrices(n_points=15, lag_time=lag_time)
+        self.olt = olt
 
         # Do length per traj
         lpt_list = list()
@@ -381,59 +392,15 @@ def ll_dir_to_x(fn):
     return np.log(x)
 
 
-# def get_speedup2(toy, popt_gold, p0=None, error_val=0.4):
-#     # Optimize
-#     popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
-#     speedup = _time_vs_error(error_val, *popt_gold) / _time_vs_error(error_val, *popt_toy)
-#     return speedup
-# 
-# def plot_and_fit(toy, p0=None):
-#     ax = pp.gca()
-#     popt_toy, _ = optimize.curve_fit(_error_vs_time, toy.errors[:, 0], toy.errors[:, 1], p0=p0)
-#     xs = np.linspace(1, toy.errors[-1, 0])
-#     ys = _error_vs_time(xs, *popt_toy)
-#     ax.plot(toy.errors[:, 0], toy.errors[:, 1], 'o', label=toy.get_name())
-#     ax.plot(xs, ys, color=ax.lines[-1].get_color())
-#     print popt_toy
-#     return popt_toy
-
-# def plot_speedup_bar(toys, popt_gold, xlabel, directory_to_x_func=None, width=0.4, p0=None, error_val=0.4):
-#     speedups = list()
-#     xvals = list()
-#     xlabels = list()
-#     for toy in toys:
-#         speedups.append(get_speedup2(toy, popt_gold, p0, error_val))
-# 
-#         if directory_to_x_func is not None:
-#             xvals.append(directory_to_x_func(toy.directory))
-#             xlabels.append(toy.directory)
-# 
-#     if directory_to_x_func is None:
-#         xvals = np.linspace(0, 10.0, len(toys))
-# 
-#     pp.bar(xvals, speedups, bottom=0, width=width, log=True)
-#     pp.xticks(np.array(xvals) + width / 2, np.exp(xvals))
-#     xmin, xmax = pp.xlim()
-#     pp.hlines(1.0, xmin, xmax)  # Break even
-#     pp.xlim(xmin, xmax)
-#     pp.ylabel("Speedup")
-#     pp.xlabel(xlabel)
-#     print xlabels
-#     print speedups
-
-
 def main(options):
-    if os.path.exists('results.pickl'):
-        with open('results.pickl', 'rb') as f:
-            c = pickle.load(f)
-    else:
-        c = Compare()
 
     print "You specified options {}".format(options)
 
+    c = Compare()
+
     if '1' in options:
         c.do_clustering(distance_cutoff=0.25, n_medoid_iters=10)
-    if '2' in options:
+    if '2' in options:            
         c.calculate_implied_timescales(lag_times=xrange(1, 100, 5), n_timescales=3)
     if '3' in options:
         c.calculate_all_tmatrices(lag_time=20)
@@ -447,10 +414,10 @@ def parse():
     print """Quantitative analysis for adaptive sampling on the muller potential.
 
         Include the following options:
-         1 - Do clustering
-         2 - Calculate ITs
+         1 - Do clustering on gold
+         2 - Calculate ITs of gold
          3 - Calculate transition matrices (x3)
-         4 - Apply func to transition matricies to get error
+         4 - Apply func to transition matrices to get error
     """
     if len(sys.argv) > 1:
         main(sys.argv[1])
