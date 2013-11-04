@@ -34,7 +34,7 @@ class ToySim(object):
         # Other Attributes
         self.traj_list = list()
         self.good_lag_time = None
-        
+
         self.t_matrices = None
         self.errors = None
 
@@ -68,24 +68,24 @@ class ToySim(object):
         counts = msml.get_count_matrix_from_assignments(assignments, n_states=None, lag_time=lag_time)
         rev_counts, t_matrix, populations, mapping = msml.build_msm(counts, ergodic_trimming=False)
         return t_matrix
-    
-    def calculate_errors(self, n_eigen, gold_tmatrix):        
+
+    def calculate_errors(self, n_eigen, gold_tmatrix):
         gvals, gvecs = msma.get_eigenvectors(gold_tmatrix, n_eigs=n_eigen)
         errors = np.zeros((len(self.t_matrices), 2))
-        
+
         for i, (wall_steps, t_matrix) in enumerate(self.t_matrices):
             vals, vecs = msma.get_eigenvectors(t_matrix, n_eigs=n_eigen)
             if gvecs.shape[0] != vecs.shape[0]:
                 print "Error: Vectors are not the same shape!"
-            
+
             error = 0.0
             for j in xrange(n_eigen):
                 diff = vecs[:, j] - gvecs[:, j]
                 error += np.dot(diff, diff)
-                
+
             errors[i, 0] = wall_steps
             errors[i, 1] = error
-        
+
         self.errors = errors
 
     def __getstate__(self):
@@ -96,15 +96,15 @@ class ToySim(object):
         except KeyError:
             pass
         return state
-    
+
 class OneLongT(ToySim):
-    
+
     def load_trajs(self, load_up_to_this_percent=1.0, verbose=True):
         """Load trajectories by percentage.
 
         Returns number of wall steps.
         """
-        
+
         assert load_up_to_this_percent <= 1.0, 'Must load less than 100%'
 
         traj_list = get_data.get_trajs(directory=os.path.join(self.directory, 'trajs/'), dim=2)
@@ -121,8 +121,8 @@ class OneLongT(ToySim):
         wall_steps = load_end
         self.traj_list = traj_list
         return wall_steps
-    
-    
+
+
     def calculate_tmatrices(self, n_points=15, lag_time=None):
         """Calculate transition matrices at n_points percentages of data.
         """
@@ -136,13 +136,13 @@ class OneLongT(ToySim):
         t_matrices = list()
         for percent in percents:
             try:
-                wall_steps = self.load_trajs(load_stride=1, load_up_to_this_percent=percent)
+                wall_steps = self.load_trajs(load_up_to_this_percent=percent)
                 t_matrix = self.build_msm(lag_time)
                 t_matrices.append((wall_steps, t_matrix))
 
                 print "Built MSM from gold using {:.2f}% of data".format(100.*percent)
             except:
-                print "Couldn't build msm {} using {:.2f}% of data".format(self.get_name(), 100.*percent)
+                print "Couldn't build msm from ontlongt using {:.2f}% of data".format(100.*percent)
 
         self.t_matrices = t_matrices
 
@@ -156,9 +156,9 @@ class Gold(ToySim):
         traj_list = get_data.get_trajs(directory=os.path.join(self.directory, 'trajs/'), dim=2)
         self.traj_list = traj_list
 
-    def calculate_tmatrices(self, n_points=15, lag_time=None):
+    def calculate_tmatrices(self, lag_time=None):
         """Calculate a transition matrix at the end point."""
-        
+
         if lag_time is None:
             lag_time = self.good_lag_time
         else:
@@ -211,20 +211,17 @@ class LPT(ToySim):
         self.rounds = rounds
 
 
-    def load_trajs(self, load_stride, round_i, verbose=True):
+    def load_trajs(self, round_i, verbose=True):
         """Load trajectories up to round_i.
 
         Returns number of wall steps.
         """
-        self.load_stride = load_stride
-
         assert self.rounds is not None, 'Please load rounds first'
         assert round_i < len(self.rounds), 'Round index out of range %d' % round_i
 
         print "Using trajectories after round {}".format(round_i + 1)
 
         traj_list = get_data.get_trajs_from_fn_list(self.rounds[round_i])
-        traj_list = [traj[::load_stride] for traj in traj_list]
 
         # Stats
         traj_len = traj_list[0].shape[0]
@@ -250,13 +247,13 @@ class LPT(ToySim):
         t_matrices = list()
         for round_i in xrange(len(self.rounds)):
             try:
-                wall_steps = self.load_trajs(load_stride=1, round_i=round_i)
+                wall_steps = self.load_trajs(round_i=round_i)
                 t_matrix = self.build_msm(lag_time)
                 t_matrices.append((wall_steps, t_matrix))
 
                 print "Built MSM from round {}".format(round_i + 1)
             except:
-                print "Couldn't build msm {} after round {}".format(self.get_name(), round_i + 1)
+                print "Couldn't build msm lpt after round {}".format(round_i + 1)
 
         self.t_matrices = t_matrices
 
@@ -270,14 +267,14 @@ class Compare(object):
         self.gold = None
         self.n_clusters = None
         self.implied_timescales = None
-        
+
         self.olt = None
         self.ll_list = None
         self.lpt_list = None
 
     def do_clustering(self, distance_cutoff, n_medoid_iters):
         """Perform clustering on the gold run and save the clusterer.
-        
+
         Returns the clusterer.
         """
         gold = Gold('quant/gold-run/gold', clusterer=None)
@@ -298,7 +295,7 @@ class Compare(object):
         """Calculate implied timescales of the gold run at range specified
         by lag_times.
         """
-        
+
         implied_timescales = list()
         for lag_time in lag_times:
             t_matrix = self.gold.build_msm(lag_time)
@@ -314,7 +311,7 @@ class Compare(object):
 
         # Gold
         self.gold.calculate_tmatrices(lag_time)
-        
+
         # One long trajectory
         # TODO: Make this different from gold
         olt = OneLongT('quant/gold-run/gold', self.gold.clusterer)
@@ -338,19 +335,19 @@ class Compare(object):
             ll = LPT(ll_dir, self.gold.clusterer)
             ll.calculate_tmatrices(lag_time)
             ll_list.append(ll)
-            
+
         self.lpt_list = lpt_list
         self.ll_list = ll_list
-            
+
     def calculate_all_errors(self, n_eigens):
         """Calculate errors in each toy simulation."""
-        
+
         _, gold_tmatrix = self.gold.t_matrices[-1]
         self.gold.calculate_errors(n_eigens, gold_tmatrix)
-        
+
         for toysim in self.ll_list:
             toysim.calculate_errors(n_eigens, gold_tmatrix)
-            
+
         for toysim in self.lpt_list:
             toysim.calculate_errors(n_eigens, gold_tmatrix)
 
@@ -400,7 +397,7 @@ def main(options):
 
     if '1' in options:
         c.do_clustering(distance_cutoff=0.25, n_medoid_iters=10)
-    if '2' in options:            
+    if '2' in options:
         c.calculate_implied_timescales(lag_times=xrange(1, 100, 5), n_timescales=3)
     if '3' in options:
         c.calculate_all_tmatrices(lag_time=20)
