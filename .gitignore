@@ -1,3 +1,6 @@
 *.pyc
 quant/*
 *.log
+
+*.project
+*.pydevproject
