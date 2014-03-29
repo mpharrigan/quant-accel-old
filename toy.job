@@ -7,4 +7,4 @@
 
 cd /home/harrigan/projects/toy-movie-2/
 
-python src/toymovie/toy.py 1234
+python -u src/toymovie/toy.py 1234
