@@ -1,0 +1,10 @@
+#!/bin/bash
+#$ -N quant-accel
+#$ -cwd
+#$ -j y
+#$ -M harrigan@stanfor.edu
+#$ -m be
+
+cd /home/harrigan/projects/toy-movie-2/
+
+python -u src/toymovie/toy.py 1234
