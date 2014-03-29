@@ -15,7 +15,8 @@ import re
 import sqlite3 as sql
 import sys
 
-
+CLUSTER_FN = 'toy_clusterer.pickl'
+IT_FN = 'toy_its.pickl'
 
 def get_implied_timescales(t_matrix, lag_time, n_timescales):
     """Get implied timescales at a particular lag time."""
@@ -282,19 +283,27 @@ class Compare(object):
         trajs = get_data.get_shimtraj_from_trajlist(gold.traj_list)
         metric = classic.Euclidean2d()
 
-        clustering.logger.setLevel('WARNING')
+        print "Loaded trajectory"
+        # clustering.logger.setLevel('WARNING')
         hkm = clustering.HybridKMedoids(metric, trajs, k=None, distance_cutoff=distance_cutoff, local_num_iters=n_medoid_iters)
         self.n_clusters = hkm.get_generators_as_traj()['XYZList'].shape[0]
 
         print "Clustered data into {:,} clusters".format(self.n_clusters)
-        gold.clusterer = hkm
-        self.gold = gold
-        return hkm
+
+        with open(CLUSTER_FN, 'w', protocol=2) as f:
+            pickle.dump(hkm, f)
+
 
     def calculate_implied_timescales(self, lag_times, n_timescales):
         """Calculate implied timescales of the gold run at range specified
         by lag_times.
         """
+
+        with open(CLUSTER_FN) as f:
+            hkm = pickle.load(f)
+        gold = Gold('quant/gold-run/gold', clusterer=hkm)
+        gold.load_trajs()
+
 
         implied_timescales = list()
         for lag_time in lag_times:
@@ -303,8 +312,8 @@ class Compare(object):
             implied_timescales.append((lag_time, it))
             print "Calculated lag time at time {}".format(lag_time)
 
-        self.implied_timescales = implied_timescales
-        return implied_timescales
+        with open(IT_FN) as f:
+            pickle.dump(implied_timescales, f, protocol=2)
 
     def calculate_all_tmatrices(self, lag_time):
         """Calculate all the transition matrices."""
@@ -404,8 +413,8 @@ def main(options):
     if '4' in options:
         c.calculate_all_errors(n_eigens=2)
 
-    with open('results.pickl', 'wb') as f:
-        pickle.dump(c, f, protocol=2)
+#     with open('results.pickl', 'wb') as f:
+#         pickle.dump(c, f, protocol=2)
 
 def parse():
     print """Quantitative analysis for adaptive sampling on the muller potential.
